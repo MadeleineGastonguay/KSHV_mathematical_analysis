@@ -1,0 +1,340 @@
+## This script has functions required to simulate episome data, calculate the likelihood, estimate its parameters, and calculate uncertainty
+
+#####
+# Simulation Functions
+#####
+
+# Function to simulate episome data
+sim_one_cell <- function(X0, Pr, Ps, id){
+  # How many episomes replicate?
+  r <- sum(rbinom(X0, 1, Pr))
+  # How many replicated episomes segregate?
+  s <- sum(rbinom(r, 1, Ps))
+  # Assign k replicated pairs to cell 1
+  k <- sum(rbinom(r-s, 1, 0.5))
+  # Assign j singletons to cell 1
+  j <- sum(rbinom(X0-r, 1, 0.5))
+  
+  # Count episomes in cell 1 and cell 2
+  X1 <- s + 2*k + j
+  X2 <- X0 + r - (s + 2*k + j)
+  
+  data.frame(r, s, k, j, X1, X2)
+}
+
+# Function to simulate multiple cells:
+# X0s is a vector of length n_cells with the initial number of episomes. Alternatively, it can be a single value if all cells have the same to start.
+# Pr and Ps are the probability of replication and division, respectively
+# n_cells is the number of cells to simulate
+simulate_multiple_cells <- function(X0s, Pr, Ps, n_cells){
+  if(length(X0s) != n_cells & length(X0s) != 1) stop("Incorect dimension for X0s")
+  
+  data.frame(X0 = X0s, Pr, Ps, id = 1:n_cells) %>% 
+    bind_cols(pmap_df(., sim_one_cell))
+}
+
+#####
+# Likelihood function
+#####
+
+# The likelihood itself depends on initial number of episomes, episomes in each daughter cell, and the probability of replication and division
+likelihood <- function(X1, X2, X0, Pr, Ps){
+  R = X1 + X2 - X0
+  # Portion of likelihood that isn't in summation
+  if(R > X0 | R < 0){
+    L = 0
+  }else{
+    L = choose(X0, R)*Pr^R*(1-Pr)^(X0-R)*2^(X1 != X2)  
+    # Sum over possible values of s (number of replicated episome pairs that segregate) and k (number of replicated episome pairs that don't segregate):
+    sums = 0
+    for(s in 0:R){
+      for(k in 0:((X1-s)/2)){
+        sums = sums + 0.5^(X0-s)*choose(R, s)*Ps^s*(1-Ps)^(R-s)*choose(R-s, k)*choose(X0-R, X1-s- 2*k)
+      }
+    }
+    L = L*sums
+  }
+  return(c("likelihood" = L))
+}
+
+#####
+# Grid search functions
+#####
+
+# Function to find the parameters Pr and Ps that maximize the likelihood of the observed data
+calculate_maximum_likelihood <- function(data, Pr_values, Ps_values){
+  
+  # Define grid of parameter combinations to test
+  parameter_grid <- expand_grid(Pr = Pr_values, Ps = Ps_values)
+  
+  # Function to calculate likelihood for a given observed data
+  get_likelihood <- function(data, parameter_grid){
+    # Set up a dataframe of likelihoods to calculate
+    # Note that we only calculate the likelihood of the observed data once given each Pr and Ps since all observations in this "chunk" are the same
+    parameter_grid <- expand_grid(parameter_grid, data %>% distinct(X0, X1, X2))
+    
+    likelihoods <- parameter_grid %>% 
+      # Calculate likelihood at each parameter combination
+      bind_cols(pmap_df(., likelihood)) %>% 
+      # Calculate the log likelihood, multiplying by the number of observations with the same data to get the likelihood of observing all of them
+      mutate(log_likelihood = log(likelihood)*nrow(data))
+    likelihoods  
+  }
+  
+  # Nest the data frame to observations with the same values
+  data %>% nest(data = c(X0, X1, X2, id)) %>% 
+    # For each set of observed data, calculate the likelihood at all combinations of Pr and Ps
+    mutate(l = map(data, get_likelihood, parameter_grid)) %>%  pull(l) %>% 
+    # Pull together the results for each observed value
+    bind_rows %>% group_by(Pr, Ps) %>% 
+    # Add up log likelihoods to get likelihood of observing all the data given Pr and Ps
+    summarise(log_likelihood = sum(log_likelihood)) %>% 
+    ungroup()
+  
+}
+
+# Function to find the parameters Pr and Ps that maximize the likelihood of the observed data, given a PMF for X0
+calculate_maximum_likelihood_unknownX0 <- function(data, Pr_values, Ps_values, PMF){
+  # data will have a column for id, X1, and X2
+  
+  # Define grid of parameter combinations to test
+  parameter_grid <- expand_grid(Pr = Pr_values, Ps = Ps_values, X0 = PMF$X0)
+  
+  # Function to calculate likelihood for a given observed data
+  get_likelihood <- function(data, parameter_grid, PMF){
+   max_X0 <- unique(data$X1 + data$X2)
+    min_X0 <- ceiling(max_X0/2)
+    
+    # print(min_X0)
+    
+    # adjust PMF accordingly:
+    PMF2 <- PMF %>% mutate(prob = ifelse(X0 >= min_X0 & X0 <= max_X0, prob, 0),
+                           prob = prob/sum(prob))
+    parameter_grid <- parameter_grid %>% filter(X0 >= min_X0 & X0 <= max_X0)
+    
+    # Set up a dataframe of likelihoods to calculate
+    # Note that we only calculate the likelihood of the observed data once given each Pr and Ps since all observations in this "chunk" are the same
+    parameter_grid <- expand_grid(parameter_grid, data %>% distinct(X1, X2))
+    
+    likelihoods <- parameter_grid %>% 
+      # Calculate likelihood at each parameter combination
+      bind_cols(pmap_df(., likelihood)) %>% 
+      merge(PMF2) %>% 
+      mutate(likelihood = likelihood*prob) %>% 
+      group_by(Pr, Ps) %>%
+      summarise(#likelihood = sum(likelihood),
+        log_likelihood = log(sum(likelihood))*nrow(data)) %>%
+      ungroup
+    likelihoods
+  }
+  
+  # Nest the data frame to observations with the same values
+  data %>% 
+    rowwise %>% mutate(outcome = paste(max(X1,X2), min(X1, X2), sep = "_")) %>% ungroup %>% 
+    nest(data = c(X1, X2, id)) %>% 
+    # For each set of observed data, calculate the likelihood at all combinations of Pr and Ps
+    mutate(l = map(data, get_likelihood, parameter_grid, PMF)) %>%  pull(l) %>% 
+    # Pull together the results for each observed value
+    bind_rows %>% group_by(Pr, Ps) %>% 
+    # Add up log likelihoods to get likelihood of observing all the data given Pr and Ps
+    summarise(log_likelihood = sum(log_likelihood))%>% 
+    ungroup()
+  
+}
+
+
+## Function to calculate uncertainty in maximum likelihood estimates
+calculate_CI <- function(likelihoods){
+  probabilities <- likelihoods %>% 
+    # Convert to probability
+    mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
+           probability = likelihood/sum(likelihood)) %>% 
+    # Rank by probability 
+    arrange(desc(probability)) %>% 
+    # Find boxes that sum to 0.95
+    mutate(cumulative_prob = cumsum(probability),
+           t = abs(cumulative_prob - 0.95))
+  
+  threshold <- probabilities %>% filter(cumulative_prob >= 0.95) %>% 
+    filter(t == min(t)) %>% 
+    pull(cumulative_prob)
+  probabilities <- probabilities %>% filter(cumulative_prob <= threshold)  
+  
+  # 95% CI for Pr:
+  CI_Pr <- range(probabilities$Pr)
+  # 95% CI for Ps:
+  CI_Ps <- range(probabilities$Ps)
+  # MLE:
+  mle <- probabilities %>% slice(1) %>% select(Pr, Ps) %>% unlist
+  
+  list(probs = probabilities, estimates = data.frame(MLE_Pr = mle[1], MLE_Ps = mle[2], min_Pr = CI_Pr[1], min_Ps = CI_Ps[1], max_Pr = CI_Pr[2], max_Ps =CI_Ps[2]))
+}
+
+# Function for running a grid search of possible Pr and Ps values, calculate uncertainty, and optionally plot the results
+run_grid_search <- function(simulated_data, viz = T, increment = 0.01, known_X0 = T, PMF = NA, CI = T){
+  # simulated_data is a data frame simulated with the columns X0, X1, X2, and id (outcome of simulate_multiple_cells)
+  # viz is a logical indicating if the results should be visualized
+  # increment is a parameter that determines how fine-grained the grid search is
+  
+  parameter_values <- seq(0,1,by = increment)
+  if(known_X0){
+    grid_search <- calculate_maximum_likelihood(simulated_data, parameter_values, parameter_values)  
+  }else{
+    grid_search <- calculate_maximum_likelihood_unknownX0(simulated_data, parameter_values, parameter_values, PMF)
+  }
+  
+  out <- list(grid_search = grid_search, simulated_data = simulated_data)
+  
+  if(CI){
+    CIs <- calculate_CI(grid_search)$estimates
+    top_95 <- calculate_CI(grid_search)$probs    
+    out <- list(grid_search = grid_search, estimates = CIs, top_95 = top_95, simulated_data = simulated_data)
+  }
+  
+  if(viz){
+    plot_grid_search(out, known_X0)
+  }
+  
+  # out <- list(grid_search = grid_search, simulated_data = simulated_data)
+  return(out)
+}
+
+# Function to plot the output of run_grid_search()
+plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F){
+  grid_search <- run_grid_search_out$grid_search
+  CIs <- run_grid_search_out$estimates
+  top_95 <- run_grid_search_out$top_95
+  simulated_data <- run_grid_search_out$simulated_data
+  
+  fill_label <- ifelse(prob, "probability", "Log Likelihood")
+  
+  if(prob){
+    grid_search_plot <- grid_search %>% 
+      mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
+             probability = likelihood/sum(likelihood)) %>%  
+      ggplot(aes(Pr, Ps)) + 
+      geom_tile(aes(fill = probability)) 
+  }else{
+    grid_search_plot <- grid_search %>% 
+      ggplot(aes(Pr, Ps)) + 
+      geom_tile(aes(fill = log_likelihood)) 
+  }
+  
+  grid_search_plot <- grid_search_plot +
+    geom_tile(data = top_95, fill = NA, color = "black") +
+    geom_errorbarh(data = CIs, aes(y = MLE_Ps, xmin = min_Pr, xmax = max_Pr), height = 0, inherit.aes = F, color = "white") + 
+    geom_errorbar(data = CIs, aes(x = MLE_Pr, ymin = min_Ps, ymax = max_Ps), width = 0, inherit.aes = F,  color =  "white") +
+    geom_point(data = CIs, aes(MLE_Pr, MLE_Ps, color = "MLE")) +
+    scale_color_manual(values = c("black", "red")) + 
+    labs(fill = fill_label, caption = "Error Bars show 95% CI for Pr and Ps", title = "Grid Search for Maximum Likelihood Estimate of Pr and Ps")  + 
+    theme_classic()
+  
+  if(simulation){
+    grid_search_plot <- grid_search_plot + geom_point(data = distinct(simulated_data, Pr, Ps),  aes(color = "Parameter Values"))  # Add actual parameter values
+  }
+  
+  Pr_marginal_likelihood <- grid_search %>% 
+    mutate(likelihood = exp(log_likelihood - max(log_likelihood))) %>% 
+    group_by(Pr) %>% summarise(likelihood = sum(likelihood)) %>% 
+    ggplot(aes(Pr, likelihood)) + geom_line() + labs(y = "Marginal\nLikelihood") + 
+    theme_classic()
+  
+  Ps_marginal_likelihood <- grid_search %>% 
+    mutate(likelihood = exp(log_likelihood - max(log_likelihood))) %>% 
+    group_by(Ps) %>% summarise(likelihood = sum(likelihood)) %>% 
+    ggplot(aes(Ps, likelihood)) + geom_line() + labs(y = "Marginal\nLikelihood") + 
+    theme_classic()
+  
+  print(Pr_marginal_likelihood + 
+          theme(axis.title.x = element_blank(), plot.margin = margin(0,0,0,0), 
+                axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.line.x = element_blank()) +
+          plot_spacer() + 
+          grid_search_plot + theme(plot.margin = margin(0,0,0,0), plot.title = element_blank()) +
+          Ps_marginal_likelihood + coord_flip() + 
+          theme(axis.title.y = element_blank(), plot.margin = margin(0,0,0,0),
+                axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.line.y = element_blank()) +
+          plot_layout(guides = "collect", heights = c(0.5,2), widths = c(2,0.5)) + 
+          plot_annotation(title = "Grid Search for Maxmimum Likelihood Estimate of Pr and Ps"))
+}
+
+
+#####
+# Gibbs Sampling Functions
+#####
+
+
+# function to get the un-normalized probability of n
+log_likelihood_n <- function(n, mu, sigma2, I){ 
+  # log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dnbinom(n, 2, 0.5))
+  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dpois(n, 1))
+}
+
+# function to run Gibbs sampling
+run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
+  q <- length(I)
+  
+  # Initial guesses
+  tau <- rep(NA, n_iterations)
+  tau[1] <- tau0
+  mu <- rep( NA, n_iterations)
+  mu[1] <- mu0
+  
+  # initialize matrix of ns
+  n <- matrix(NA, ncol = q, nrow = n_iterations)
+  if(any(is.na(ns))){
+    n[1,] <- round(I/mu[1])
+    n[1,][n[1,] == 0] <- 1  
+  }else{
+    n[1,] <- ns
+  }
+  
+  for(j in 2:n_iterations){
+    for(k in 1:q){
+      # define the probability of each nk given observed data and other parameters
+      nks <- seq(1,100) # define possible values
+      nk_like <- nks %>% sapply(log_likelihood_n, mu = mu[j-1], sigma2 = 1/tau[j-1], I = I[k]) # log likelihood
+      nk_probs <- exp(nk_like - max(nk_like))/sum(exp(nk_like - max(nk_like)), na.rm = T) #probabilities
+      # sample nk
+      n[j, k] <- sample(nks, 1, prob = nk_probs, replace =  T)
+    }
+    # sample mu:
+    mu[j] <- rnorm(1, sum(I/n[j,])/q, sqrt(1/(q*tau[j-1])))
+    # sample tau:
+    tau[j] <- rgamma(1, q/2, 0.5*sum((I/n[j,]-mu[j])^2))
+  }
+  
+  return(cbind(iteration = 1:n_iterations, mu, tau, setNames(as.data.frame(n), paste0("n",1:q))) )
+}
+
+
+#####
+# Functions to assess convergence of markov chains
+#####
+
+# To assess the convergence of the chains, I calculated $\hat{R}$, bulk effective sample size (ESS), and tail effective 
+# sample size based on this [vignette](https://cran.r-project.org/web/packages/bayesplot/vignettes/visual-mcmc-diagnostics.html). 
+#  $\hat{R}$ measures the ratio of the average variance of draws within each chain to the variance of the pooled draws across chains; 
+# if all chains are at equilibrium, these will be the same and $\hat{R}$ will be one. The effective sample size is an estimate of the 
+# number of independent draws from the posterior distribution of the estimand of interest. The larger the ratio of $n_{eff}$ to $N$, 
+# the better. Bulk-ESS is related to efficiency of mean and median estimates and tail-ESS is related to the efficiency of the variance and 
+# quantile estimates of the posterior distribution.
+
+get_convergence_stats <- function(data){
+  sims <- data %>%
+    pivot_wider(names_from = chain, values_from = value) %>%
+    select(-iteration) %>% as.matrix
+  
+  return(tibble(Rhat = Rhat(sims), ESS_bulk = ess_bulk(sims), ESS_tail = ess_tail(sims)))
+}
+
+convergence_results <- function(all_chains){
+  convergence <- all_chains %>% 
+    pivot_longer(!c(chain, iteration)) %>% 
+    group_by(name) %>% nest() %>% 
+    mutate(data = future_map(data, ~get_convergence_stats(.x))) %>% 
+    unnest(cols = c(data)) %>% 
+    ungroup
+}
+
+
+
