@@ -43,15 +43,15 @@ here()
 source(here("scripts", "likelihood_functions.R"))
 
 # Folder for results
-results_folder <- here("results", "Figure_2")
+results_folder <- here("results", "Figure_3")
 dir.create(results_folder)
 
 #####
 # Read in data
 #####
 
-daughter_cell_file <- "Figure 2 dots new version.xlsx"
-mother_cell_file <- "Figure 2 non dividing cells 2.xlsx"
+daughter_cell_file <- "Fig3 dividing cells.xlsx"
+mother_cell_file <- "Fig3 non dividing cells.xlsx"
 
 # Daughter cell data
 episome_data <- readxl::read_excel(here("data", "derived", daughter_cell_file))
@@ -103,9 +103,7 @@ chain3 <- run_gibbs(tau0, mu0[3], episome_data$total_cluster_intensity, n_iterat
 chain4 <- run_gibbs(tau0, mu0[4], episome_data$total_cluster_intensity, n_iterations)
 chain5 <- run_gibbs(tau0, mu0[5], episome_data$total_cluster_intensity, n_iterations)
 
-# save(chain1, chain2, chain3, chain4, chain5, file = here(results_folder, "daughter_cell_cluster_Gibbs_samples.RData"))
-
-# load(here(results_folder, "daughter_cell_cluster_Gibbs_samples.RData"))
+save(chain1, chain2, chain3, chain4, chain5, file = here(results_folder, "daughter_cell_cluster_Gibbs_samples.RData"))
 
 # # TEST running Gibbs in parallel
 # gibbs_samples <- foreach(i = 1:length(mu0), .packages = "tidyverse") %dopar% {
@@ -121,74 +119,42 @@ all_chains <- rbind(chain1, chain2, chain3, chain4, chain5) %>%
 # Analyze results of Gibbs
 #####
 
-inferred_mu <- median(all_chains$mu)
-inferred_sigma2 <- median(1/all_chains$tau)
-inferred_sigma <- median(sqrt(1/all_chains$tau))
-cat('mean:', inferred_mu, '\nvariance:', inferred_sigma2, '\nstandard deviation:', inferred_sigma)
-
 
 p1 <- all_chains %>% 
   ggplot(aes(iteration, mu, color = chain)) + 
-  geom_line() +
+  geom_line() + 
   geom_point(shape = NA) + 
-  geom_hline(yintercept = inferred_mu, lty = "dashed") + 
-  geom_text(data = data.frame(NA), aes(5000, inferred_mu, label = str_interp("${round(inferred_mu,2)}")),
-            inherit.aes = F, vjust = -0.2, hjust = -0.2) + 
   theme(legend.position = "bottom") + 
   ylim(c(0, max(all_chains$mu))) +
-  labs(title = "Trace of the mean (\u00b5)", 
-       y = bquote("mean of the distribution of\nfluorescence intensity for one episome (\u00b5)"))
+  labs(title = "Trace of mu")
 
 (p1 <- ggMarginal(p1, margins = "y", groupColour = T))
 
 p2 <- all_chains %>% 
   ggplot(aes(iteration, 1/tau, color = chain)) + 
-  geom_line() +
-  geom_point(shape = NA) +
+  geom_line() + 
+  geom_point(shape = NA) + 
   theme(legend.position = "bottom") +
   ylim(c(0, max(1/all_chains$tau))) + 
-  labs(title = "Trace of the variance (\u03C3\u00b2)", 
-       y = bquote("variance of the distribution of\nfluorescence intensity for one episome (\u03C3\u00b2)"))
+  labs(title = "Trace of sigma^2")
 
 (p2 <- ggMarginal(p2, margins = "y", groupColour = T))
-
-p2.2 <- all_chains %>% 
-  ggplot(aes(iteration, sqrt(1/tau), color = chain)) + 
-  geom_line() +
-  geom_point(shape = NA) +
-  geom_hline(yintercept = inferred_sigma, lty = "dashed") + 
-  geom_text(data = data.frame(NA), aes(5000, inferred_sigma, label = str_interp("${round(inferred_sigma,2)}")),
-            inherit.aes = F, vjust = -0.2, hjust = -0.2) + 
-  theme(legend.position = "bottom") +
-  ylim(c(0, max(sqrt(1/all_chains$tau)))) + 
-  labs(title = "Trace of the standard deviation (\u03C3)", 
-       y = bquote("standard deviation of the distribution of\nfluorescence intensity for one episome (\u03C3)"))
-
-(p2.2 <- ggMarginal(p2.2, margins = "y", groupColour = T))
 
 
 # Based on the median mu and sigma above, the inferred distribution of intensities for a single cluster is:
 # plot the distribution of cluster intensities with inferred parameters:
-x <- seq(0, max(episome_data$total_cluster_intensity), length.out = 500)
-(p3 <- ggplot(tibble(x, y = dnorm(x, inferred_mu, inferred_sigma)), aes(x, y)) + 
+x <- seq(0, 4000, length.out = 500)
+inferred_mu <- median(all_chains$mu)
+inferred_sigma2 <- median(1/all_chains$tau)
+cat('mean:', inferred_mu, '\nvariance:', inferred_sigma2, '\nstandard deviation:', sqrt(inferred_sigma2))
+(p3 <- ggplot(tibble(x, y = dnorm(x, inferred_mu, sqrt(inferred_sigma2))), aes(x, y)) + 
     geom_line() + 
-    labs(x = "Fluorescence Intensity", 
-         y = "probability density", 
-         title = "Inferred distribution of fluorescence intensity\nof a single cluster",
-         subtitle = str_interp("mean = ${round(inferred_mu,2)}, standard deviation = ${round(inferred_sigma, 2)}")))
+    labs(x = "I_k", y = "probability density", title = "Inferred Distribution of intensity for a single cluster"))
 
 
 ## infer nk for each cluster according to the mode of the posterior distribution
 all_chain_ns <- all_chains %>% select(-mu, -tau)  %>% pivot_longer(!c(iteration, chain), names_to = "cluster")
 modes <- all_chain_ns %>% add_count(chain, cluster, value) %>% group_by(chain, cluster) %>% mutate(mode = value[which.max(n)]) %>% ungroup()
-
-modes %>% filter(chain == "chain1") %>% 
-  ggplot(aes(value, group = cluster)) + geom_density() + 
-  facet_wrap(~mode, labeller = "label_both", scales = 'free_y') + 
-  labs(x = "number of episomes in cluster",
-       y = "density",
-       title = "Posterior distribution of the number of episomes per cluster")
-
 
 distinct_modes <- modes %>% distinct(chain, cluster, mode)
 
@@ -202,7 +168,6 @@ p4 <- distinct_modes %>% count(mode, chain) %>% mutate(freq = n/sum(n)) %>%
 p5  <- episome_data %>% 
   mutate(cluster = cluster_id) %>% 
   merge(distinct_modes) %>% 
-  filter(chain == "chain1") %>% 
   ggplot(aes(total_cluster_intensity, color = as.factor(mode))) + 
   geom_density() + 
   labs(title = "Distribution of cluster intensities for clusters with each nk", color  = "mode")
@@ -210,32 +175,12 @@ p5  <- episome_data %>%
 p6 <- episome_data %>% 
   mutate(cluster = cluster_id) %>% 
   merge(distinct_modes) %>% 
-  filter(chain == "chain1") %>% 
   ggplot(aes(total_cluster_intensity, as.factor(min_episome_in_cluster))) + 
-  geom_jitter(aes(color = as.factor(mode))) +
+  geom_jitter(aes(color = as.factor(mode), shape = chain)) +
   geom_boxplot(outlier.shape = NA, fill = NA) +
   labs(title = "Distribution of cluster intensities stratified by minimum number of episomes",
        subtitle = "colored by inferred nk",
        color = "mode", y = "Min # episome in cluster", x = "Total  Cluster Intensity")
-
-p6.2 <- episome_data %>% 
-  mutate(cluster = cluster_id) %>% 
-  merge(distinct_modes) %>% 
-  filter(chain == "chain1") %>% 
-  ggplot(aes(total_cluster_intensity, as.factor(mode))) + 
-  geom_jitter(aes(color = as.factor(min_episome_in_cluster))) +
-  geom_boxplot(outlier.shape = NA, fill = NA) +
-  labs(title = "Distribution of cluster intensities",
-       y = "Mode of the posterior distribution", 
-       color = "Min # episome in cluster",
-       x = "Total  Cluster Intensity") + 
-  theme(legend.position = c(1,0), legend.justification = c(1,0), legend.background = element_blank())
-
-
-merged_df <- all_chains %>% filter(chain == "chain1") %>% 
-  pivot_longer(starts_with("n"), names_to = "cluster_id", values_to = "n") %>% 
-  left_join(episome_data %>% select(cluster_id, total_cluster_intensity, min_episome_in_cluster)) 
-
 
 
 #####
@@ -281,7 +226,6 @@ p8  <- cell_modes %>% count(chain, mode) %>% mutate(freq = n/sum(n)) %>%
   labs(x = "mode of number of episomes per cell", title = "histogram of inferred number per cell given by mode of the posterior distribution")
 
 
-
 #####
 # Convergence Statistics for Daughter Cell Gibbs Sampling
 #####
@@ -324,9 +268,7 @@ chain3_m <- run_gibbs(tau0, mu0[3], intensities, n_iterations)
 chain4_m <- run_gibbs(tau0, mu0[4], intensities, n_iterations)
 chain5_m <- run_gibbs(tau0, mu0[5], intensities, n_iterations)
 
-# save(chain1_m, chain2_m, chain3_m, chain4_m, chain5_m, file = here(results_folder, "mother_cell_cluster_Gibbs_samples.RData"))
-
-load(here(results_folder, "mother_cell_cluster_Gibbs_samples.RData"))
+save(chain1_m, chain2_m, chain3_m, chain4_m, chain5_m, file = here(results_folder, "mother_cell_cluster_Gibbs_samples.RData"))
 
 all_chains_initial <- rbind(chain1_m %>% mutate(chain = "chain 1"),
                             chain2_m %>% mutate(chain = "chain 2"),
@@ -371,8 +313,7 @@ p2 <- ggMarginal(p2, margins = "y", groupColour = T)
 mother_cell_samples_long <- as.list(unique(mother_cell_data$cell_id)) %>% lapply(get_n_cell, all_chains = all_chains_initial, data = mother_cell_data) %>% bind_rows() 
 mother_cell_samples <- cell_samples_long %>% pivot_wider(names_from = cell_id, values_from = number_of_episomes)
 
-# save(mother_cell_samples, mother_cell_samples_long, file = here(results_folder, "mother_cell_Gibbs_samples.RData"))
-load(here(results_folder, "mother_cell_Gibbs_samples.RData"))
+save(mother_cell_samples, mother_cell_samples_long, file = here(results_folder, "mother_cell_Gibbs_samples.RData"))
 
 # Calculate the mode number of episomes per cell 
 p3 <- mother_cell_samples_long %>% 
@@ -428,6 +369,11 @@ convergence_initial %>% slice(1:2)
 
 (lambda <- fitdistr(mother_cell_samples_long$number_of_episomes, "Poisson")$estimate)
 
+test_lambda <- mother_cell_samples_long %>% filter(chain == 'chain 1') %>% 
+  group_by(iteration) %>% 
+  summarise(lambda = fitdistr(number_of_episomes, "Poisson")$estimate) %>% 
+  ungroup()
+
 p7  <- mother_cell_samples_long %>% 
   count(number_of_episomes) %>% mutate(freq = n/sum(n)) %>% 
   ggplot(aes(number_of_episomes, freq)) + 
@@ -435,6 +381,9 @@ p7  <- mother_cell_samples_long %>%
   geom_point(data = tibble(number_of_episomes = 1:max(mother_cell_samples_long$number_of_episomes), 
                            y= dpois(number_of_episomes, lambda = lambda)),
              aes(y  = y)) + 
+  geom_point(data = tibble(number_of_episomes = 1:max(mother_cell_samples_long$number_of_episomes), 
+                           y= dpois(number_of_episomes, lambda = 2.28)),
+             aes(y  = y, color = "test")) + 
   labs(title = "Sampled distribtion of initial number of episomes",
        subtitle = str_interp("poisson(lambda = ${round(lambda, 2)}), median = ${median(mother_cell_samples_long$number_of_episomes)}"))
 
@@ -454,24 +403,17 @@ ggsave(here(results_folder, "mother_cell_gibbs_results.pdf"),
        gridExtra::marrangeGrob(plot_list2, nrow=1, ncol=1),
        width = 7, height = 7)
 
+
 #####
 # Make sure inferred distribution of initial episomes makes sense with the inferred episomes per daughter cell
 #####
 
-sampled_daughter_cells <- cell_samples_long %>% filter(chain == "chain1") %>% 
+sampled_daughter_cells <- cell_samples_long %>% filter(chain == "chain1") %>%
   left_join(distinct(episome_data, cell_id, mother_cell_id, daughter_cell), by = c("cell_id")) %>% 
   mutate(daughter_cell = paste0("X", daughter_cell)) %>% 
   # make one row per mother cell per sample (iteration:chain)
   select(-cell_id) %>% 
   pivot_wider(names_from = daughter_cell, values_from = number_of_episomes, values_fill = 0) 
-
-initial_episome_constraints <- sampled_daughter_cells %>% mutate(max = X1 + X2, min = ceiling(max/2)) %>% 
-  pivot_longer(c(min, max)) %>% 
-  count(name, value) %>% 
-  group_by(name) %>% mutate(freq = n/sum(n)) %>% 
-  ggplot(aes(value, freq, color = name))  + 
-  geom_bar(stat = "identity", fill = NA) + 
-  labs(x = "Initial number of episomes", y= "Frequency", color = "contraint")
 
 initial_episome_constraints <- sampled_daughter_cells %>% mutate(max = X1 + X2, min = ceiling(max/2)) %>% 
   pivot_longer(c(min, max)) %>% 
@@ -486,14 +428,14 @@ initial_episome_constraints <- sampled_daughter_cells %>% mutate(max = X1 + X2, 
   theme(legend.position = "none") + 
   scale_x_continuous(breaks =0:15)
 
+# The inferred distribution of mother cells does not fall bewteen the constraints of the daughter cells
+# fit distributions to them
+
 sampled_daughter_cells %>% mutate(max = X1 + X2) %>% pull(max) %>% fitdistr( "Poisson")
 sampled_daughter_cells %>% mutate(min = ceiling((X1 + X2)/2)) %>% pull(min) %>% fitdistr( "Poisson")
 
+
 compare_daughter_cell_posteriors <- sampled_daughter_cells %>% 
-  filter(chain == "chain1") %>% 
-  mutate(temp_X1 = ifelse(X1 > X2, X1, X2),
-         temp_X2 = ifelse(X2 < X1, X2, X1)) %>% 
-  select(-X1, -X2, X1 = temp_X1, X2 = temp_X2) %>% 
   count(X1, X2) %>% mutate(p = n/sum(n)) %>% 
   ggplot(aes(X1, X2, fill = p)) + 
   geom_tile() + 
@@ -501,26 +443,7 @@ compare_daughter_cell_posteriors <- sampled_daughter_cells %>%
   scale_y_continuous(breaks = 0:max(sampled_daughter_cells$X2)) + 
   scale_fill_viridis_c() + 
   labs(title = "Fraction of sampled X1 and X2 combinations across all cells",
-       fill = "fraction",
-       x = "number of epsiomes in daughter cell 1 (X1)",
-       y = "number of epsiomes in daughter cell 2 (X2)") 
-
-compare_daughter_cell_modes <- sampled_daughter_cells %>% 
-  filter(chain == "chain1") %>% 
-  mutate(temp_X1 = ifelse(X1 > X2, X1, X2),
-         temp_X2 = ifelse(X2 < X1, X2, X1)) %>% 
-  select(-X1, -X2, X1 = temp_X1, X2 = temp_X2) %>% 
-  count(X1, X2) %>% mutate(p = n/sum(n)) %>% 
-  ggplot(aes(X1, X2, fill = p)) + 
-  geom_tile() + 
-  scale_x_continuous(breaks = 0:max(sampled_daughter_cells$X1)) + 
-  scale_y_continuous(breaks = 0:max(sampled_daughter_cells$X2)) + 
-  scale_fill_viridis_c() + 
-  labs(title = "Fraction of sampled X1 and X2 combinations across all cells",
-       fill = "fraction",
-       x = "number of epsiomes in daughter cell 1 (X1)",
-       y = "number of epsiomes in daughter cell 2 (X2)") 
-
+       fill = "fraction") 
 
 ## Histograms of episomes per cell:
 plot_histograms <- function(sampled_daughter_cells, total_only = T){
@@ -545,6 +468,8 @@ plot_histograms <- function(sampled_daughter_cells, total_only = T){
     geom_bar(stat = "identity") + 
     labs(x = "Number of of episomes in each daughter cell (X1, X2)",
          y = "Number of daughter cell pairs")
+  
+  print(temp_df %>% count(X1 == X2))
   
   if(total_only){
     distribution_df <- rbind(
@@ -619,7 +544,7 @@ plot_histograms <- function(sampled_daughter_cells, total_only = T){
   #   
   #   plot_layout(ncol = 1)
   # 
-   
+  
   return(list(pair_histogram, all_dist))
 }
 
@@ -635,8 +560,7 @@ ggsave(here(results_folder, "all_histograms.png"), figure_plots[[2]], width = 5,
 
 # randomly choose 100 samples from the markov chain to use as inferred value of number of episomes per cell:
 n_samples <- 100
-samples <- cell_samples %>% filter(chain == "chain1") %>% 
-  sample_n(n_samples) %>% mutate(sample_id = 1:n_samples)
+samples <- sample_n(cell_samples, n_samples) %>% mutate(sample_id = 1:n_samples)
 
 # reformat samples so that we can apply the grid search function: 
 # need a column for mother cell id, number of cells in daughter cell 1, and number of cells in daughter cecll 2
@@ -689,9 +613,60 @@ ggsave(here(results_folder, "grid_search_with_uncertainty.pdf"),
        width = 7, height = 7)
 
 
-#####
-# Figure out mother cell -daughter cell mismatch issue
 
+#####
+# Try again with different X0 based on my suspician that we are assuuming it is too large
+
+# iterate through the sampled data and apply a grid search to each one
+MLE_with_uncertainty_newX0 <- foreach(i = 1:n_samples, .packages = "tidyverse") %dopar% {
+  temp <- sampled_experimental_data %>% 
+    filter(sample_id == i) %>% 
+    select(id =  mother_cell_id,  X1, X2) %>% 
+    #  run a  grid search with a grid ranging by 0.01 and a PMF inferred from the 
+    #  Experimental data
+    run_grid_search(viz = F, increment = 0.01, 
+                    PMF = tibble(X0 = 1:100, prob = dpois(X0, lambda = 2.39)), 
+                    known_X0 = F, CI = F)
+  
+  # scale the log  loglikelihood according to the maximum  value and then convert to a probability
+  temp <- temp$grid_search %>% mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
+                                      probability = likelihood/sum(likelihood))
+  temp
+}
+
+MLE_with_uncertainty_df_newX0 <- MLE_with_uncertainty_newX0 %>% bind_rows() %>% 
+  select(Pr, Ps, probability) %>% 
+  group_by(Pr, Ps) %>% summarise(probability = sum(probability)) %>% 
+  ungroup %>% 
+  mutate(probability = probability/sum(probability),
+         log_likelihood = log(probability))
+
+MLE_with_uncertainty_CI_newX0 <- calculate_CI(MLE_with_uncertainty_df_newX0)
+
+MLE_uncertainty_grid_newX0 <- list(grid_search = MLE_with_uncertainty_df_newX0, 
+                                   estimates = MLE_with_uncertainty_CI_newX0$estimates,
+                                   top_95 = MLE_with_uncertainty_CI_newX0$probs)
+
+plot_grid_search(MLE_uncertainty_grid_newX0, prob = T, simulation = F)
+
+MLE_with_uncertainty_CI_newX0$estimates
+
+
+mother_cell_data %>% 
+  ggplot(aes(total_cluster_intensity, y = after_stat(density))) +
+  geom_histogram(aes(fill = "mother intensity"), alpha = 0.5) + 
+  geom_histogram(aes(x = 2*total_cluster_intensity, fill = "perfect replication"), alpha = 0.5) + 
+  geom_histogram(data = episome_data %>% group_by(mother_cell_id) %>% 
+                   mutate(int = sum(total_cluster_intensity)), 
+                 aes(int, fill = "total daughter intensity"), alpha = 0.5)
+
+
+median(all_chains$mu)
+median(all_chains_initial$mu)
+
+
+
+### FIgure out issue with data
 
 mother_cell_data %>% 
   group_by(cell_id) %>% summarise(total_cluster_intensity = sum(total_cluster_intensity)) %>% 
@@ -707,7 +682,7 @@ mother_cell_data %>%
   # theme(legend.position = c(1,1), legend.justification = c(1.1,1.1))  +
   guides(color = "none") +
   labs(title = "Distribution of whole cell intensities",
-       subtitle = "Fixed 8TR") +
+       subtitle = "Live 8TR") +
   
   mother_cell_data %>%
   group_by(cell_id) %>% summarise(total_cluster_intensity = sum(total_cluster_intensity)) %>% 
@@ -729,9 +704,10 @@ mother_cell_data %>%
   geom_jitter(aes(y = "Mother Cells")) + 
   geom_boxplot(data = episome_data, aes(y = "Daughter Cells"), outlier.shape = NA) + 
   geom_jitter(data = episome_data, aes( y = "Daughter Cells")) + 
+  # coord_flip() + 
   labs(x = "Cluster Intensity", y = "Cell Set", 
        title = "Distribution of cluster intensities",
-       subtitle = "Fixed 8TR") 
+       subtitle = "Live 8TR") 
 
 daughter_modes <- sampled_daughter_cells %>% 
   filter(chain == "chain1") %>% 
@@ -746,11 +722,11 @@ daughter_modes <- sampled_daughter_cells %>%
          total = X1 + X2) %>% 
   select(-X1, -X2, X1 = temp_X1, X2 = temp_X2, total) 
 
-   
+
 mother_modes <- mother_cell_samples_long %>% filter(chain == "chain 1") %>% 
-    count(cell_id, number_of_episomes) %>% 
-    group_by(cell_id) %>% filter(n == max(n)) %>% 
-    ungroup() %>% select(-n)
+  count(cell_id, number_of_episomes) %>% 
+  group_by(cell_id) %>% filter(n == max(n)) %>% 
+  ungroup() %>% select(-n)
 
 
 mother_modes %>% 
@@ -758,7 +734,7 @@ mother_modes %>%
   geom_bar(aes(fill = "mother cells", color = "mother cells"), alpha = 0.5, width = 0.9) + 
   geom_bar(aes(x = 2*number_of_episomes, fill = "perfect replication\nfrom mother cells", color = "perfect replication\nfrom mother cells"), alpha = 0.5, width = 0.9) + 
   geom_bar(data = daughter_modes, 
-                 aes(total, fill = "total daughter cells", color = "total daughter cells"), alpha = 0.5, width = 0.9) + 
+           aes(total, fill = "total daughter cells", color = "total daughter cells"), alpha = 0.5, width = 0.9) + 
   labs(x = "number of episomes", fill = "cell set", y= "frequency") + 
   scale_y_continuous(labels = scales::percent) +
   scale_x_continuous(breaks = c(0:20)) +
@@ -771,12 +747,12 @@ mother_modes %>%
   geom_boxplot(aes(fill = "mother cells", y= "mother cells"), alpha = 0.5) + 
   geom_boxplot(aes(x = 2*number_of_episomes, fill = "perfect replication\nfrom mother cells", y ="perfect replication\nfrom mother cells"), alpha = 0.5) + 
   geom_boxplot(data = daughter_modes, 
-           aes(total, fill = "total daughter cells", y = "total daughter cells"), alpha = 0.5) + 
+               aes(total, fill = "total daughter cells", y = "total daughter cells"), alpha = 0.5) + 
   labs(x = "number of episomes", fill = "cell set", y= "frequency") + 
   theme(legend.position = "none") + 
   
   plot_layout(ncol = 1, heights = c(3,1))
 
-daughter_modes %>% filter(total == 13)
-  
+
+
 
