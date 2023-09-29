@@ -1,0 +1,413 @@
+---
+title: "Implementing Gibbs Sampling on Real Data"
+author: "Maddie Gastonguay"
+date: "2023-05-16"
+output:
+  html_document:
+    toc: true
+    theme: flatly
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RColorBrewer)
+library(ggExtra)
+library(rstan)
+library(furrr)
+library(bayesplot)
+theme_set(theme_bw())
+setwd("/Users/Maddie/Library/CloudStorage/OneDrive-JohnsHopkins/Hill Rotation")
+```
+
+## Explore real data:
+
+The data has a total of 149 cluster from 77 cells. 
+
+```{r}
+episome_data <- readxl::read_excel("Figure 2 dots new version_MGedit.xlsx", skip = 1,  .name_repair = "none")
+
+colnames <- names(episome_data)
+names(episome_data) <- c(colnames[1:2], paste(colnames[3:5], "daughter1", sep = "_"), paste(colnames[6:8], "daughter2", sep = "_"), colnames[9:10])
+episome_data <- episome_data[,-9]
+
+episome_data <- rbind(episome_data %>% select( `Mother cell id`, contains("daughter1")) %>% mutate(daughter_cell = 1) %>% 
+                        rename_with(~gsub("_daughter1", "", .x)),
+                      episome_data %>% select( `Mother cell id`, contains("daughter2")) %>% mutate(daughter_cell =2) %>% 
+                        rename_with(~gsub("_daughter2", "", .x))
+) %>% 
+  select(`Mother cell id`, daughter_cell, Cluster, everything()) %>% 
+  arrange(`Mother cell id`, daughter_cell, Cluster) %>% 
+  filter(!is.na(`Total cluster intensity`), `Total cluster intensity` != 0) %>% 
+  mutate(cluster_id = paste0("n", 1:nrow(.)),
+         cell_id = paste0("c", `Mother cell id`, "_", daughter_cell))
+
+
+head(episome_data)
+
+```
+
+```{r}
+episome_data %>% 
+  ggplot(aes(`Total cluster intensity`)) + 
+  geom_density() + 
+  ggtitle("Distribution of Cluster Intensities")
+```
+
+When dividing intensities by the minimum number of episomes per cluster, the mean is about 925 and variance is 327178.3. These numbers serve as upper bounds for the true mean and variance because there are likely more episomes per cluster than the minumum number.
+
+```{r}
+episome_data %>% mutate(ratio = `Total cluster intensity`/`Min # episome in cluster`) %>% 
+  summarise(mean = mean(ratio, na.rm = T), variance = var(ratio, na.rm = T), sd = sd(ratio, na.rm = T))
+```
+
+```{r}
+episome_data %>% mutate(ratio = `Total cluster intensity`/`Min # episome in cluster`) %>% 
+  ggplot(aes(ratio)) + 
+  geom_density() + 
+  labs(x = "Ratio of cluster intensity to minimum number of episomes",
+       title = "Distribution of Cluster Intensities normalized by minimum number of episomes")
+```
+```{r}
+episome_data %>% mutate(ratio = `Total cluster intensity`) %>% 
+  ggplot(aes(ratio, as.factor(`Min # episome in cluster`))) + 
+  geom_boxplot() + 
+  labs(x = "Ratio of cluster intensity to minimum number of episomes", y = "Minimum number of episomes")
+
+```
+
+
+## Implementing Gibbs Sampling
+
+```{r}
+# function to get the un-normalized probability of n
+log_likelihood_n <- function(n, mu, sigma2, I){ 
+  # log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dnbinom(n, 2, 0.5))
+  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dpois(n, 1))
+}
+
+# function to run Gibbs sampling
+run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
+  q <- length(I)
+  
+  # Initial guesses
+  tau <- rep(NA, n_iterations)
+  tau[1] <- tau0
+  mu <- rep( NA, n_iterations)
+  mu[1] <- mu0
+  
+  # initialize matrix of ns
+  n <- matrix(NA, ncol = q, nrow = n_iterations)
+  if(any(is.na(ns))){
+    n[1,] <- round(I/mu[1])
+    n[1,][n[1,] == 0] <- 1  
+  }else{
+    n[1,] <- ns
+  }
+  
+  for(j in 2:n_iterations){
+    for(k in 1:q){
+      # define the probability of each nk given observed data and other parameters
+      nks <- seq(1,100) # define possible values
+      nk_like <- nks %>% sapply(log_likelihood_n, mu = mu[j-1], sigma2 = 1/tau[j-1], I = I[k]) # log likelihood
+      nk_probs <- exp(nk_like - max(nk_like))/sum(exp(nk_like - max(nk_like)), na.rm = T) #probabilities
+      # sample nk
+      n[j, k] <- sample(nks, 1, prob = nk_probs, replace =  T)
+    }
+    # sample mu:
+    mu[j] <- rnorm(1, sum(I/n[j,])/q, sqrt(1/(q*tau[j-1])))
+    # sample tau:
+    tau[j] <- rgamma(1, q/2, 0.5*sum((I/n[j,]-mu[j])^2))
+  }
+  
+  return(cbind(iteration = 1:n_iterations, mu, tau, setNames(as.data.frame(n), paste0("n",1:q))) )
+}
+```
+
+We will assume that the value of $mu$ is bounded between the ranges observed in the data. Thus, we will select initial conditions within this range. We will only try one value of tau that is small enough (meaning sigma is large enough) that the chain will converge based on chains run in simulated data. We will determine the intial conditions for nk based on the observed data and the initial condition for mu.
+
+```{r}
+tau0 <- 1e-5 
+n_iterations <- 109000
+ICs <- episome_data %>% mutate(ratio = `Total cluster intensity`/`Min # episome in cluster`) %>% filter(!is.na(ratio)) %>% pull(ratio) %>% summary
+mu0 <- ICs[-3]
+
+cat("tau0:", tau0, "\nmu0:", mu0)
+```
+
+
+```{r, eval = F}
+chain1 <- run_gibbs(tau0, mu0[1], episome_data$`Total cluster intensity`, n_iterations)
+chain2 <- run_gibbs(tau0, mu0[2], episome_data$`Total cluster intensity`, n_iterations)
+chain3 <- run_gibbs(tau0, mu0[3], episome_data$`Total cluster intensity`, n_iterations)
+chain4 <- run_gibbs(tau0, mu0[4], episome_data$`Total cluster intensity`, n_iterations)
+chain5 <- run_gibbs(tau0, mu0[5], episome_data$`Total cluster intensity`, n_iterations)
+```
+
+```{r, eval = F, include = F}
+save(chain1, chain2, chain3, chain4, chain5, file = "Gibbs_samples_real_data.RData")
+```
+
+
+```{r}
+all_chains <- rbind(chain1, chain2, chain3, chain4, chain5) %>% 
+  mutate(chain = as.factor(rep(c("chain1", "chain2", "chain3", "chain4", "chain5"), each = n_iterations)))  %>% 
+  # use a burn-in of 5000 iterations
+  filter(iteration > 5000)
+```
+
+### Inference of $\mu$ and $\sigma^2$ 
+
+```{r}
+p1 <- all_chains %>% 
+  ggplot(aes(iteration, mu, color = chain)) + 
+  geom_line() + 
+  geom_point(shape = NA) + 
+  theme(legend.position = "bottom") + 
+  ylim(c(0, max(all_chains$mu))) +
+  labs(title = "Trace of mu")
+ 
+ggMarginal(p1, margins = "y", groupColour = T)
+
+```
+
+```{r}
+p2 <- all_chains %>% 
+  ggplot(aes(iteration, 1/tau, color = chain)) + 
+  geom_line() + 
+  geom_point(shape = NA) + 
+  theme(legend.position = "bottom") +
+  ylim(c(0, max(1/all_chains$tau))) + 
+  labs(title = "Trace of sigma^2")
+
+ggMarginal(p2, margins = "y", groupColour = T)
+```
+
+Based on the median $\mu$ (577) and $\sigma^2$ (21904) above, the inferred distribution of intensities for a single cluster is:
+
+```{r}
+# plot the distribution of cluster intensities with inferred parameters:
+x <- seq(0, 4000, length.out = 500)
+inferred_mu <- median(all_chains$mu)
+inferred_sigma2 <- median(1/all_chains$tau)
+cat('mean:', inferred_mu, '\nvariance:', inferred_sigma2, '\nstandard deviation:', sqrt(inferred_sigma2))
+plot(x, dnorm(x, inferred_mu, sqrt(inferred_sigma2)), 'l', ylab = "probability density", xlab =  "I_k",
+     main = "Inferred Distribution of intensity for a single cluster")
+```
+
+### Inferring nk
+
+One example trace plot: 
+
+```{r}
+p3 <- all_chains %>% 
+  ggplot(aes(iteration, n37, color = chain)) + 
+  geom_line() + 
+  geom_point(shape = NA) + 
+  theme(legend.position = "bottom") +
+  labs(title = "Trace of Cluster 37")
+
+ggMarginal(p3, margins = "y", groupColour = T)
+```
+
+```{r, eval = F}
+all_chain_ns <- all_chains %>% select(-mu, -tau)  %>% pivot_longer(!c(iteration, chain), names_to = "cluster")
+modes <- all_chain_ns %>% add_count(chain, cluster, value) %>% group_by(chain, cluster) %>% mutate(mode = value[which.max(n)]) %>% ungroup()
+
+distinct_modes <- modes %>% distinct(chain, cluster, mode)
+```
+
+Posterior probabilities of all ns:
+```{r}
+# check the posteriors for nk from chain1:
+temp_df <- all_chain_ns %>% filter(chain == "chain1") %>% 
+  group_by(cluster) %>% add_count(value) %>% 
+  mutate(mode = value[which.max(n)]) %>% 
+  ungroup 
+
+temp_df[seq(1, nrow(temp_df), by = 10),] %>% 
+  ggplot(aes(value, group = cluster)) + 
+  geom_density() + facet_wrap(~mode, scales = "free_y", labeller = "label_both") + 
+  labs(x = "nk", title = "Posterior probabilities for nk")
+```
+
+Distribution of the modes of these posterior distributions:
+
+```{r}
+distinct_modes %>% count(mode, chain) %>% mutate(freq = n/sum(n)) %>% 
+  ggplot(aes(mode, freq)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = n), vjust = -0.1) + 
+  facet_wrap(~chain) +
+  labs(x = "mode of nk", title = "histogram of inferred nk given by mode of the posterior distribution")
+```
+
+It looks like there is some disagreement between the modes of different chains for cluster n105. It's cluster intensity is 867 and the posterior probabilities for all the chains are so similar, but 1 or 2 episomes are equally likely.
+```{r}
+distinct_modes %>% filter(cluster == "n105")
+all_chains %>% ggplot(aes(n105, color = chain)) + geom_density()
+```
+
+
+How do these inferences relate to the observed intensity data?
+
+```{r}
+episome_data %>% 
+  mutate(cluster = cluster_id) %>% 
+  merge(distinct_modes) %>% 
+  ggplot(aes(`Total cluster intensity`, color = as.factor(mode))) + 
+  geom_density() + 
+  labs(title = "Distribution of cluster intensities for clusters with each nk", color  = "mode")
+```
+
+
+```{r}
+episome_data %>% 
+  mutate(cluster = cluster_id) %>% 
+  merge(distinct_modes) %>% 
+  ggplot(aes(`Total cluster intensity`, as.factor(`Min # episome in cluster`))) + 
+  geom_jitter(aes(color = as.factor(mode), shape = chain)) +
+  geom_boxplot(outlier.shape = NA, fill = NA) +
+  labs(title = "Distribution of cluster intensities stratified by minimum number of episomes",
+       subtitle = "colored by inferred nk",
+       color = "mode", y = "Min # episome in cluster")
+  
+```
+
+There is one cluster for which we inferred a number of episomes that was less than the minimum for all 5 chains.
+
+```{r}
+episome_data %>% 
+  mutate(cluster = cluster_id) %>% 
+  merge(distinct_modes) %>% 
+  select(chain, cluster, `Min # episome in cluster`, mode, `Total cluster intensity`) %>% 
+  filter(`Min # episome in cluster` > mode) 
+```
+## Number of episomes per cell
+We are actually interested in the number of episomes per cell, not per cluster. To find this, we will sum samples of the posterior distribution for each cluster in a cell.
+
+```{r, eval = F}
+# function to get number of episomes in cell:
+get_n_cell <- function(cell){
+  coi <- episome_data %>% filter(cell_id == cell) %>% pull(cluster_id)  
+  n_cell <- apply(all_chains[,coi,drop = F], 1, sum)
+  all_chains %>% select(iteration, chain) %>% mutate(cell_id = cell, value = n_cell)
+}
+
+cell_samples_long <- as.list(unique(episome_data$cell_id)) %>% lapply(get_n_cell) %>% bind_rows() 
+cell_samples <- cell_samples_long %>% pivot_wider(names_from = cell_id)
+```
+
+```{r, eval = F, include= F}
+save(cell_samples_long, cell_samples, file = "gibbs_cell_samples.RData")
+```
+
+What do the posterior probabilities of these cells look like?
+
+```{r}
+temp_df <- cell_samples_long %>% filter(chain == "chain1") %>% 
+  group_by(cell_id) %>% add_count(value) %>% 
+  mutate(mode = value[which.max(n)]) %>% 
+  ungroup 
+
+temp_df[seq(1, nrow(temp_df), by = 10),] %>% 
+  ggplot(aes(value, group = cell_id)) + 
+  geom_density() + facet_wrap(~mode, scales = "free_y", labeller = "label_both") + 
+  labs(x = "number of episomes per cell",  title = "Posterior probabilities for number of episomes per cell")
+```
+
+Let's look at the distribution of episomes per cell, determined by the mode of the posterior distribution. 
+
+```{r}
+cell_modes <- cell_samples_long %>% count(chain, cell_id, value) %>% group_by(cell_id, chain) %>% filter(n == max(n)) %>% rename(mode = value) %>% ungroup
+
+cell_modes %>% count(chain, mode) %>% mutate(freq = n/sum(n)) %>% 
+  ggplot(aes(mode, freq)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = n), vjust = -0.1) + 
+  facet_wrap(~chain) +
+  labs(x = "mode of number of episomes per cell", title = "histogram of inferred number per cell given by mode of the posterior distribution")
+```
+
+All chains agree on the total number of episomes in each cell.
+```{r, include = F, echo  = F}
+cell_modes %>% count(cell_id, mode) %>% arrange(n)
+```
+
+```{r}
+# write out the inferred number of episomes per cell:
+inferred_n_per_cell <- merge(
+episome_data %>% distinct(`Mother cell id`, daughter_cell, cell_id),
+cell_modes %>% filter(chain == "chain1") %>% select(cell_id, mode)
+)
+
+# add secnod daughter cell for mother cells with only one:
+add_count(inferred_n_per_cell, `Mother cell id`) %>% arrange(n) %>% head
+
+inferred_n_per_cell <- inferred_n_per_cell %>% rbind(tibble(cell_id = c("c3_2", "c4_2", "c8_2"), `Mother cell id`  = c(3, 4, 8), daughter_cell = 2, mode = 0)) %>% 
+  arrange(`Mother cell id`, daughter_cell)
+
+write_csv(inferred_n_per_cell, "inferred_n_per_cell.csv")
+```
+
+
+## Convergence statistics
+To assess the convergence of the chains, I calculated $\hat{R}$, bulk effective sample size (ESS), tail effective sample size, and autocorrelation based on this [vignette](https://cran.r-project.org/web/packages/bayesplot/vignettes/visual-mcmc-diagnostics.html). $\hat{R}$ measures the ratio of the average variance of draws within each chain to the variance of the pooled draws across chains; if all chains are at equilibrium, these will be the same and $\hat{R}$ will be one. The effective sample size is an estimate of the number of independent draws from the posterior distribution of the estimand of interest. The larger the ratio of $n_{eff}$ to $N$, the better. In this case, $N$ is 10,4000 because I ran the chains for 109,000 iterations with a burn-in of 5,000. Bulk-ESS is related to efficiency of mean and median estimates and tail-ESS is related to the efficiency of the variance and quantile estimates of the posterior distribution. Autocorrelation indicates how related sequential draws of the posterior distribution are.
+
+```{r, eval = F}
+get_convergence_stats <- function(data){
+  sims <- data %>%
+    pivot_wider(names_from = chain, values_from = value) %>%
+    select(-iteration) %>% as.matrix
+
+  return(tibble(Rhat = Rhat(sims), ESS_bulk = ess_bulk(sims), ESS_tail = ess_tail(sims)))
+}
+
+convergence <- all_chains %>% 
+  pivot_longer(!c(chain, iteration)) %>% 
+  group_by(name) %>% nest() %>% 
+  mutate(data = future_map(data, ~get_convergence_stats(.x))) %>% 
+  unnest(cols = c(data))
+
+```
+
+
+### Rhat
+All Rhat values are very close to 1, indicating that the chains are at equilibrium.
+```{r}
+mcmc_rhat(convergence$Rhat) 
+```
+
+### Effective sample size
+
+The bulk-ESS for is greater than the actual sample size for most nks. For mu and tau, it is only about 25% of the actual sample size. The tail-ESS is greater than 50% of the actual sample size for all parameters.
+
+```{r}
+mcmc_neff(convergence$ESS_bulk/(n_iterations- 5000)) + ggtitle("Bulk Effective Sample Size Ratio")
+mcmc_neff(convergence$ESS_tail/(n_iterations- 5000)) + ggtitle("Tail Effective Sample Size Ratio")
+```
+
+Although the effective sample size of mu and sigma are small in ratio, they still have at least 25,000 samples.
+
+```{r}
+convergence %>% ungroup %>% slice(1:2)
+```
+
+
+### Autocorrelation
+There is a decent amount of autocorrelation for the mean and tau. If we thin the chain, we can reduce this but based on [this post](http://doingbayesiandataanalysis.blogspot.com/2011/11/thinning-to-reduce-autocorrelation.html), I don't think we need to worry about it.
+
+```{r}
+mu_array <- all_chains %>% select(iteration, chain, mu) %>% pivot_wider(names_from = chain, values_from = mu) %>% select(-iteration) %>% as.matrix()
+tau_array <- all_chains %>% select(iteration, chain,tau) %>% pivot_wider(names_from = chain, values_from = tau) %>% select(-iteration) %>% as.matrix()
+n1_array <- all_chains %>% select(iteration, chain,n1) %>% pivot_wider(names_from = chain, values_from =n1) %>% select(-iteration) %>% as.matrix()
+
+params <- array(dim = c(nrow(mu_array), ncol(mu_array), 3), dimnames = list(rep("", nrow(mu_array)), rep("", ncol(mu_array)), c("mu", "tau", "n1")))
+params[,,1] <- mu_array
+params[,,2] <- tau_array
+params[,,3] <- n1_array
+
+mcmc_acf(params) + ggtitle("Autocorrelation")
+mcmc_acf(params[seq(1, nrow(mu_array), by = 10),,]) + ggtitle("Thinned Autocorrelation")
+```
+

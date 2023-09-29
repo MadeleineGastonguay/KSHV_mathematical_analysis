@@ -1,0 +1,364 @@
+---
+title: "Likelihood Applied to Real Data"
+author: "Maddie Gastonguay"
+date: "2023-05-17"
+output:
+  html_document:
+    toc: true
+    theme: flatly
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = '100%')
+library(tidyverse)
+library(viridis)
+library(scales)
+library(ggExtra)
+library(patchwork)
+library(furrr)
+library(MASS)
+select <- dplyr::select
+source("likelihood_functions.R")
+```
+
+## Overview
+
+After using Gibbs sampling to infer the number of episomes per cell, we now need to infer the probability of replication and segregation. Since the initial number of episomes (X0) is unknown, we will marginalize the likelihood over possible values of X0, according to the probability density function for X0. We will define this distribution based on experimental data below.
+
+```{r}
+# read in inferred number of episomes per daughter cell
+n_per_cell <- read_csv("inferred_n_per_cell.csv")
+
+# construct the distribution of possible starting number of episomes:
+(observed_inital <- tibble(X0 = 1:5, n = c(4, 33, 86, 12, 4)) %>% mutate(prob = n/sum(n)))
+```
+
+```{r}
+observed_inital %>% ggplot(aes(X0, prob)) + geom_col() + labs(title = "Observed distribution of initial number of episomes (X0)")
+```
+
+
+### Fit a neagtive binomial and poisson distribution to the data
+
+To determine the PDF of the intiial number of episomes, we will fit both a negative binomial and poisson distribution to the experimental data.
+
+negative binomial:
+```{r}
+fitdistr(observed_inital$X0, "negative binomial")$estimate
+```
+
+poisson:
+```{r}
+fitdistr(observed_inital$X0, "Poisson")$estimate
+```
+
+
+```{r}
+# format data for Maximum likelihood estimation
+big_data <- n_per_cell %>% select(-cell_id) %>%  
+  mutate(daughter_cell = paste0("X", daughter_cell)) %>% 
+  rename(id = `Mother cell id`) %>% 
+  pivot_wider(names_from = daughter_cell, values_from = mode) 
+```
+
+There is barely a difference between the negative binomial and poisson distributions, so I will use the former.
+
+```{r}
+# explore distribution of the observed intiaal versus the constraints determined by the total number of episomes in the daughter cell
+big_data %>% mutate(min = ceiling((X1 + X2)/2), max = X1 + X2) %>% 
+  ggplot(aes(min, ..prop..)) + 
+  geom_bar(aes(color = "minimum initial episomes from inferred number per daughter cell"), fill = NA) + 
+  geom_bar(aes(x = max, color = "maximum initial episomes from inferred number per daughter cell"), fill = NA) + 
+  geom_bar(data = observed_inital, 
+           aes(X0, n/sum(n), color = "observed initial number of episomes"), 
+           stat = "identity", fill = NA) + 
+  theme(legend.position = "bottom") + 
+  guides(col = guide_legend(nrow= 2)) + 
+  labs(x = "X0", title = "Distribution of initial number of episomes", color = "",
+       subtitle = "Overlayed with negative binomial distribution with mode 3") + 
+  # add negative binomial probabilitiy distribution without X0:
+  geom_point(data = tibble(X0 = 1:13, prob = dnbinom(X0, 100, mu = 3)) %>% mutate(prob = prob/sum(prob)),
+             aes(X0, prob, color = "negative binomial"), alpha = 0.5) + 
+  geom_point(data = tibble(X0 = 1:13, prob = dpois(X0, 3)) %>% mutate(prob = prob/sum(prob)),
+             aes(X0, prob, color = "poisson"), alpha = 0.5)
+```
+
+## Find MLE for experimental data
+
+I will find the MLE for the experimental data with several different values for the mean of the assumed distribution of X0 values.
+
+### Assume mu = 3 
+
+We will start by assuming that the experimental data provided the correct distribution for the initial number of episomes.
+
+```{r, eval = F}
+# set PMF for X0 so that the mode is 3
+PMF <- tibble(X0 = 1:100, prob = dnbinom(X0, 100, mu = 3))
+grid_search <- run_grid_search(big_data, known_X0 = F, PMF = PMF, viz = F)
+```
+
+```{r}
+plot_grid_search(grid_search, simulation = F)
+```
+
+
+### Assume mu = 4.275
+
+Next, we will assume a PDF with a mean equal to the mean of the distribution of minimum X0 required to observe the inferred number of episomes per cell.
+
+```{r, eval = F}
+grid_search_PMF4 <- run_grid_search(big_data, known_X0 = F, 
+                                    PMF = tibble(X0 = 1:100, prob = dnbinom(X0, 100, mu = 4.275)), viz = F)
+```
+
+```{r}
+plot_grid_search(grid_search_PMF4, simulation = F)
+```
+
+
+### Assume mu = 5
+
+```{r, eval = F}
+grid_search_PMF5 <- run_grid_search(big_data, known_X0 = F, 
+                                    PMF = tibble(X0 = 1:100, prob = dnbinom(X0, 100, mu = 5)), viz = F)
+```
+```{r}
+plot_grid_search(grid_search_PMF5, simulation = F)
+```
+
+Assuming a larger mean for the distribution of initial episomes leads to smaller estimates of Pr and larger estimates of Ps. There are also larger confidence intervals at larger values of the mean.
+
+```{r}
+rbind(
+grid_search$estimates %>% mutate(assumed_mu = 3),
+grid_search_PMF4$estimates %>% mutate(assumed_mu = 4.275),
+grid_search_PMF5$estimates %>% mutate(assumed_mu = 5)
+) %>% 
+  select(assumed_mu, everything()) %>% 
+  mutate(Pr_width = max_Pr - min_Pr,
+         Ps_width = max_Ps - min_Ps)
+  
+```
+
+## Run Simulations with varying X0s that do not match the inferred distribution
+
+To assess the performance of the algorithm, we will simulate data under varying conditions. For all simulations, I will use n = 40, Pr = 0.77, and Ps = 0.94 to match our experimental data. I will simulate data with initial episomes sampled from a negative binomial distribution with a mean = 3, 4.275, or 5. The choice of 4.275 is because this it is the mean of the minimum number of initial episomes according to the inferred number of episomes per daughter cell. When mu = 3, I will use the same simulated data from the Gibbs sampling analysis. I will apply the algorithm to the simulated data with varying assumed initial episome distributions to interrogate the impact of either over- or under- estimating this number on inference of Pr and Ps.
+
+```{r}
+n <- 40
+Pr <- 0.77
+Ps <- 0.94
+```
+
+
+### Simulations with the mean of initial episome distributions = 3
+
+We will start by simulating data with mu = 3 and applying the algorithm assuming mu = 3. The true value of Pr and Ps is well within the 95% confidence region.
+
+```{r,eval = F}
+load("extended_gibbs.RData")
+simulated_data <- simulated_events
+
+grid_results_m3 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF,  increment = 0.01, viz = F)
+```
+
+```{r}
+# hist(grid_results_m3$simulated_data$X0)
+plot_grid_search(grid_results_m3)
+```
+
+```{r}
+grid_results_m3$estimates
+```
+
+
+If we provide the simulated X0 value, the confidence region decreases. 
+
+```{r,eval  =F}
+grid_results_m3_knownX0 <- run_grid_search(simulated_data, viz = F)
+```
+
+```{r}
+plot_grid_search(grid_results_m3_knownX0)
+```
+
+Next, we will assume a slightly larger mean for the distribution of X0 (mu = 4.275). This results in a wider confidence region with the true value on the edge. The algorithm overestimates Ps, inferring that it is 1, and underestimates Pr.
+
+```{r, eval = F}
+grid_results_m3_PMF4 <- run_grid_search(grid_results_m3$simulated_data, known_X0 = F,
+                                        PMF =  tibble(X0 = 1:100, prob = dnbinom(X0, 100, mu = 4.275)),  
+                                        increment = 0.01, viz = F)
+```
+
+```{r}
+plot_grid_search(grid_results_m3_PMF4)
+```
+
+### Simulations with the mean of initial episome distributions = 4.275
+
+Next, we will assess the alorithm on simulated data with a slightly larger mean for the initial number of episomes. First, we will still assume that the mean of the distribution is 3. This results in an underestimation of Ps and an overestimation of Pr, although the true parameter values are still within the 95% confidence region.
+
+```{r,eval  =F}
+set.seed(100)
+mu <- 4.275
+X0s <- rnbinom(n, 100, mu = mu)
+while(any(X0s == 0)){
+  X0s[X0s == 0] <- rnbinom(sum(X0s == 0), 100, mu = mu)
+}
+simulated_data <- simulate_multiple_cells(X0s, Pr, Ps, n)
+
+grid_results_m4 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF,  increment = 0.01, viz = F)
+```
+
+```{r}
+# hist(grid_results_m4$simulated_data$X0)
+plot_grid_search(grid_results_m4)
+```
+
+If there is no uncertainty in X0, the algorithm has a narrower confidence region.
+
+```{r, eval = F}
+simulated_data <- grid_results_m4$simulated_data
+grid_results_m4_knownX0 <- run_grid_search(simulated_data, viz = F)
+```
+
+```{r}
+plot_grid_search(grid_results_m4_knownX0)
+```
+
+Next, we will test the algorithm assuming the mean of initial episomes is the same as how the data were simulated. The true parameter value is within the 95% confidence region, but the confidence region is wider than before and displays an eliptical shape, indicating there are several combinations of parameters that may describe the data well.
+
+```{r,eval = F}
+grid_results_m4_correct_PMF <- run_grid_search(simulated_data,
+                                               PMF = tibble(X0 = 1:100,
+                                                            prob = dnbinom(X0, 100, mu = mu)),
+                                               known_X0 = F,   viz = F)
+```
+
+```{r}
+plot_grid_search(grid_results_m4_correct_PMF)
+```
+
+We tested a uniform prior over X0, and the algorithm has no idea what to do.
+
+```{r, eval = F}
+grid_results_m4_uniform_PMF <- run_grid_search(simulated_data,
+                                               PMF = tibble(X0 = 1:100,
+                                                            prob = 1),
+                                               known_X0 = F,   viz = F)
+```
+```{r}
+plot_grid_search(grid_results_m4_uniform_PMF)
+```
+
+
+Next, we will apply the algorithm assuming a mean of 5 for the initial number of episomes, which is greater than how the data were simulated. In this case, the true value does not fall within the 95% confidence region. We overestimate Ps and underestimate Pr.
+
+
+```{r, eval = F}
+grid_results_m4_PMF5 <- run_grid_search(grid_results_m4$simulated_data, known_X0 = F, 
+                                        PMF =  tibble(X0 = 1:100, prob = dnbinom(X0, 100, mu = 5)),  
+                                        increment = 0.01, viz = F)
+```
+
+```{r}
+plot_grid_search(grid_results_m4_PMF5)
+```
+
+### Simulations with the mean of initial episome distributions = 5
+
+Lastly, we will assess the performance of the algorithm when the data were simulated with a mean of 5, to create a more dramatic mis-match between the truth (mu = 5) and assumed value (mu = 3). We suspect that this is what is occuring in our experimental data due to overlapping episomes in the imaging data leading to an under-estimation of the initial number of episomes. In this case, the true parameters do not fall within the 95% confidence region; the probability of replication is over-estimated and the probability of segregation is under estimated.
+
+```{r, eval = F}
+set.seed(100)
+mu <- 5
+X0s <- rnbinom(n, 100, mu = mu)
+while(any(X0s == 0)){
+  X0s[X0s == 0] <- rnbinom(sum(X0s == 0), 100, mu = mu)
+}
+simulated_data <- simulate_multiple_cells(X0s, Pr, Ps, n)
+
+grid_results_m5 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF,  increment = 0.01, viz = F)
+```
+
+```{r}
+plot_grid_search(grid_results_m5, simulation = T)
+```
+
+
+
+## Conclusion
+There was an error in my code that caused the algorithm to provide super narrow confidence intervals. With that fixed, the true parameter value is within the 95% confidence interval when the assumed proabability distribution for X0 is the same as what was used to simulate the data or when X0 is known. 
+
+When the assumed probability distribution has a mean lower than that of the simulated data (eg. we assume $mu = 3$ but data were simulated with $mu = 5$), the replication probability is over estimated and the probability of segregation is underestimated. Consider the case when $X0 = 4$ and 2 episomes replicate ($Pr = 0.5$) so that $X1 + X2 = 6$. If we (incorrectly) assume that $X0 = 3$, all episomes would need to replicate to explain the data ($Pr = 1$). Since our algorithm weights the likelihood when $X0 = 3$ greater than when $X0 = 4$, we assign a greater probability to Pr = 1 than Pr = 0.5, which explains why we overestimate Pr. This leads to an underestimation of Ps, because our algorithm assumes that there are more episomes that can segregate than there actually are, so it seems like a lower proportion of them segregate. 
+
+When we assumed that the probability distribution for X0 has a mean larger than that of the simulated data, we overestimate Ps and underestimate Pr. This can be explained by the reverse logic from above. We are placing greater probability on there being more episomes to start which means a lower percentage of them replicate to explain the observed data. Since the algorithm assumes fewer episomes replicate than is true, the number of episomes that actually do segregate appears to be a larger proportion and we overestimate Ps.
+
+These simulations suggest that if we suspect that the initial number of episomes is greater than what was provided, Pr will be over-estimated and Ps will be under-estimated.
+
+<!-- ```{r} -->
+<!-- # set.seed(100) -->
+<!-- mode <- 2 -->
+<!-- p <- (13-1)/(mode + 12) -->
+<!-- probs <- dnbinom(1:13, 13, p) -->
+<!-- probs <- probs/sum(probs) -->
+<!-- X0s <- sample(1:13, n, prob = probs, replace = T) -->
+<!-- hist(X0s) -->
+<!-- simulated_data <- simulate_multiple_cells(X0s, Pr, Ps, n) -->
+
+<!-- grid_results_m2 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF, viz = F) -->
+<!-- plot_grid_search(grid_results_m2) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- grid_results_m2$estimates -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # set.seed(100) -->
+<!-- mode <- 3 -->
+<!-- p <- (13-1)/(mode + 12) -->
+<!-- probs <- dnbinom(1:13, 13, p) -->
+<!-- # probs <- probs/sum(probs) -->
+<!-- X0s <- sample(1:13, n, prob = probs, replace = T) -->
+<!-- hist(X0s) -->
+<!-- simulated_data <- simulate_multiple_cells(X0s, Pr, Ps, n) -->
+
+<!-- grid_results_m3 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF,  viz = F) -->
+<!-- plot_grid_search(grid_results_m3) -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- # set.seed(100) -->
+<!-- mode <- 4 -->
+<!-- p <- (13-1)/(mode + 12) -->
+<!-- probs <- dnbinom(1:13, 13, p) -->
+<!-- # probs <- probs/sum(probs) -->
+<!-- X0s <- sample(1:13, n, prob = probs, replace = T) -->
+<!-- hist(X0s) -->
+<!-- simulated_data <- simulate_multiple_cells(X0s, Pr, Ps, n) -->
+
+<!-- grid_results_m4 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF,  viz = F) -->
+<!-- plot_grid_search(grid_results_m4) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # set.seed(100) -->
+<!-- mode <- 6 -->
+<!-- p <- (13-1)/(mode + 12) -->
+<!-- probs <- dnbinom(1:13, 13, p) -->
+<!-- # probs <- probs/sum(probs) -->
+<!-- X0s <- sample(1:13, n, prob = probs, replace = T) -->
+<!-- hist(X0s) -->
+<!-- simulated_data <- simulate_multiple_cells(X0s, Pr, Ps, n) -->
+
+<!-- grid_results_m6 <- run_grid_search(simulated_data, known_X0 = F, PMF = PMF,  viz= F) -->
+<!-- plot_grid_search(grid_results_m6) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- grid_results_m6$top_95  -->
+<!-- ``` -->
+

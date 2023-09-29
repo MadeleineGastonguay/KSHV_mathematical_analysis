@@ -1,0 +1,438 @@
+---
+title: "Implementing Gibbs Sampling"
+author: "Maddie Gastonguay"
+date: "2023-04-24"
+output:
+  html_document:
+    toc: true
+    theme: flatly
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RColorBrewer)
+library(ggExtra)
+library(rstan)
+library(furrr)
+library(bayesplot)
+theme_set(theme_bw())
+setwd("/Users/Maddie/Library/CloudStorage/OneDrive-JohnsHopkins/Hill Rotation")
+```
+
+## Explore real data:
+```{r}
+episome_data <- readxl::read_excel("Figure 2 dots new version_MGedit.xlsx", skip = 1,  .name_repair = "none")
+
+colnames <- names(episome_data)
+names(episome_data) <- c(colnames[1:2], paste(colnames[3:5], "daughter1", sep = "_"), paste(colnames[6:8], "daughter2", sep = "_"), colnames[9:10])
+episome_data <- episome_data[,-9]
+
+episome_data <- rbind(episome_data %>% select( `Mother cell id`, contains("daughter1")) %>% mutate(daughter_cell = 1) %>% 
+                        rename_with(~gsub("_daughter1", "", .x)),
+                      episome_data %>% select( `Mother cell id`, contains("daughter2")) %>% mutate(daughter_cell =2) %>% 
+                        rename_with(~gsub("_daughter2", "", .x))
+) %>% 
+  select(`Mother cell id`, daughter_cell, Cluster, everything()) %>% 
+  arrange(`Mother cell id`, daughter_cell, Cluster) %>% 
+  filter(!is.na(`Total cluster intensity`))
+
+
+head(episome_data)
+
+```
+```{r}
+episome_data %>% 
+  ggplot(aes(`Total cluster intensity`)) + 
+  geom_density() + 
+  ggtitle("Distribution of Cluster Intensities")
+```
+
+When dividing intensities by the minimum number of episomes per cluster, the mean is about 925 and variance is 327178.3.
+```{r}
+episome_data %>% mutate(ratio = `Total cluster intensity`/`Min # episome in cluster`) %>% 
+  summarise(mean = mean(ratio, na.rm = T), variance = var(ratio, na.rm = T), sd = sd(ratio, na.rm = T))
+```
+
+```{r}
+episome_data %>% mutate(ratio = `Total cluster intensity`/`Min # episome in cluster`) %>% 
+  ggplot(aes(ratio)) + 
+  geom_density() + 
+  labs(x = "Ratio of cluster intensity to minimum number of episomes",
+       title = "Distribution of Cluster Intensities normalized by minimum number of episomes")
+```
+
+## Simulate data similar to observed
+
+```{r}
+# simulate data:
+real_mu <- 925 # based on observed data
+real_sigma2 <- 100000 # based on observed data
+real_ns <- c(rep(1,105), rep(2,33), rep(3,7), rep(4,2)) # based on observed data
+q <- length(real_ns) # number of clusters
+I <- matrix(rnorm(q, real_mu*real_ns, sqrt(real_sigma2*real_ns)), ncol = q)
+
+```
+
+## Exploring PDFs for mu, tau, and nk
+
+### Empirical PDF for n_k
+
+What prior should we use for n? Does a poisson with $\lambda = 1$ work?
+```{r}
+nks <- seq(1,100) # define possible values
+pdf <- dpois(nks[1:25], 1)
+plot(nks[1:25], pdf, 'l')
+cols <- rev(brewer.pal(9, "RdPu"))
+for(i in 2:10) lines(nks[1:25], dpois(nks[1:25], i), col  = cols[i-1], 'l')
+legend(20, 0.35, seq(1:10), col = c("black", cols), lwd = 3, title = "lambda")
+```
+
+The negative binomal distribution as a less steep descent
+```{r}
+pdf <- dnbinom(nks[1:25], 1, 0.5)
+plot(nks[1:25], pdf, 'l')
+cols <- rev(brewer.pal(9, "RdPu"))
+for(i in 2:10) lines(nks[1:25], dnbinom(nks[1:25],i, 0.5), col  = cols[i-1], 'l')
+lines(nks[1:25], dpois(nks[1:25], 1), col = "blue")
+legend(20, 0.25, c(seq(1:10), "poisson"), col = c("black", cols, "blue"), lwd = 3, title = "size")
+```
+
+For now, use the poisson distribution with $\lambda = 1$. How would we sample from the pdf for n_k?
+
+```{r}
+## think about how you would sample from the pdf for n_k:
+#Observed data:
+I[140]
+real_ns[140]
+
+# function to get the un-normalized probability of n
+log_likelihood_n <- function(n, mu, sigma2, I){ 
+  # log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dnbinom(n, 2, 0.5))
+  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dpois(n, 1))
+}
+
+nks <- seq(1,100) # define possible values
+nk_like <- nks %>% sapply(log_likelihood_n, mu = real_mu, sigma2 = real_sigma2, I = I[140]) # log likelihood
+nk_probs <- exp(nk_like - max(nk_like))/sum(exp(nk_like - max(nk_like)), na.rm = T) #probabilities
+
+# plot PDF and CDF of nk:
+plot(nks, nk_like, col = ifelse(nks == real_ns[140], "red", "black"), ylab = "log likelihood")
+plot(nks, nk_probs, col = ifelse(nks == real_ns[140], "red", "black"), ylab = "probability")
+plot(nks, cumsum(nk_probs), col = ifelse(nks == real_ns[140], "red", "black"), ylab = "CDF")
+```
+
+If we used the inversion method, there will be pulls from the random uniform distribution that don't have a corresponding integer n. Can we use `sample()` from R?
+
+```{r}
+hist(sample(nks, 1000, prob = nk_probs, replace =  T), freq = F)
+points(nks, nk_probs, col = ifelse(nks == real_ns[140], "red", "black"), pch = 20)
+```
+
+### PDF for mu and sigma 
+
+We can find closed form solutions for the pdf of mu and sigma:
+```{r}
+mus <- seq(0, 3000, length.out = 1000)
+pdf <- dnorm(mus, sum(I/real_ns)/q, sqrt(real_sigma2/q))
+plot(mus, pdf, 'l')
+points(real_mu, 0, col = 'red')
+```
+
+```{r}
+taus <- seq(0,1e-4, length.out = 1000)
+alpha = q/2
+beta = 0.5*sum((I/real_ns - real_mu)^2)
+alpha/beta
+pdf <- dgamma(taus, alpha, beta)
+plot(taus, pdf, 'l')
+points(1/real_sigma2, 0, col = "red")
+```
+
+## Implementing Gibbs Sampling
+
+```{r}
+# function to run Gibbs sampling
+run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
+  q <- length(I)
+  
+  # Initial guesses
+  tau <- rep(NA, n_iterations)
+  tau[1] <- tau0
+  mu <- rep( NA, n_iterations)
+  mu[1] <- mu0
+  
+  # initialize matrix of ns
+  n <- matrix(NA, ncol = q, nrow = n_iterations)
+  if(any(is.na(ns))){
+    n[1,] <- round(I/mu[1])
+    n[1,][n[1,] == 0] <- 1  
+  }else{
+    n[1,] <- ns
+  }
+  
+  for(j in 2:n_iterations){
+    for(k in 1:q){
+      # define the probability of each nk given observed data and other parameters
+      nks <- seq(1,100) # define possible values
+      nk_like <- nks %>% sapply(log_likelihood_n, mu = mu[j-1], sigma2 = 1/tau[j-1], I = I[k]) # log likelihood
+      nk_probs <- exp(nk_like - max(nk_like))/sum(exp(nk_like - max(nk_like)), na.rm = T) #probabilities
+      # sample nk
+      n[j, k] <- sample(nks, 1, prob = nk_probs, replace =  T)
+    }
+    # sample mu:
+    mu[j] <- rnorm(1, sum(I/n[j,])/q, sqrt(1/(q*tau[j-1])))
+    # sample tau:
+    tau[j] <- rgamma(1, q/2, 0.5*sum((I/n[j,]-mu[j])^2))
+  }
+  
+  return(cbind(iteration = 1:n_iterations, mu, tau, setNames(as.data.frame(n), paste0("n",1:q))) )
+}
+```
+
+We will run Gibbs sampling for 100,000 iterations with varying combinations of initial conditions for mu and sigma, but will define $n_k^0$ as $I_k/\mu^0$. We will test $\mu^0 = 2000\text{ and }500$ and $\tau^0 = 1e-3, 1e-4,\text{ and }1e-7$. If $\tau^0$ is greater than 1e-3, $\sigma^2$ will be too small and the algorithm gives an error due to NA probabilities.
+
+```{r, include = F}
+n_iterations <- 100000
+```
+
+
+```{r, eval = F}
+n_iterations <- 100000
+tau0 <- 1e-4
+mu0 <- 2000
+chain1 <- run_gibbs(tau0, mu0, I, n_iterations)
+```
+
+```{r, eval = F}
+tau0 <- 1e-4
+mu0 <- 500
+chain2 <- run_gibbs(tau0, mu0, I, n_iterations)
+```
+
+```{r, eval = F}
+tau0 <- 1e-3
+mu0 <- 500
+chain3 <- run_gibbs(tau0, mu0, I, n_iterations)
+```
+
+```{r, eval = F}
+tau0 <- 1e-7
+mu0 <- 2000
+chain4 <- run_gibbs(tau0, mu0, I, n_iterations)
+```
+
+```{r, eval = F}
+tau0 <- 1e-7
+mu0 <- 200
+chain5 <- run_gibbs(tau0, mu0, I, n_iterations)
+```
+
+```{r, eval = F}
+tau0 <- 1e-7
+mu0 <- 3000
+chain6 <- run_gibbs(tau0, mu0, I, n_iterations)
+```
+
+```{r, include = F, eval= F}
+save(chain1, chain2, chain3, chain4, chain5, chain6, file = "gibbs_chains.RData")
+```
+```{r, include = F, eval = F}
+load("gibbs_chains.RData")
+```
+
+We will remove the first 5,000 iterations as a brun-in period
+```{r}
+all_chains <- rbind(chain1, chain2, chain3, chain4, chain5, chain6) %>% 
+  mutate(chain = as.factor(rep(c("chain1", "chain2", "chain3", "chain4", "chain5", "chain6"), each = n_iterations))) %>% 
+  # use 5000 as burn-in period
+  filter(iteration > 5000)
+```
+
+
+```{r}
+p1 <- all_chains %>% 
+  ggplot(aes(iteration, mu, color = chain)) + 
+  geom_line() + 
+  geom_point(shape = NA) + 
+  geom_hline(aes(yintercept = real_mu), color = "black") + 
+  theme(legend.position = "bottom") + 
+  ylim(c(0, max(all_chains$mu))) +
+  labs(title = "Trace of mu")
+
+ggMarginal(p1, margins = "y", groupColour = T)
+
+```
+
+```{r}
+p2 <- all_chains %>% 
+  ggplot(aes(iteration, 1/tau, color = chain)) + 
+  geom_line() + 
+  geom_point(shape = NA) + 
+  geom_hline(aes(yintercept = real_sigma2), color = "black") +
+  theme(legend.position = "bottom") +
+  ylim(c(0, max(1/all_chains$tau))) + 
+  labs(title = "Trace of sigma^2")
+
+ggMarginal(p2, margins = "y", groupColour = T)
+```
+
+```{r}
+all_chains %>% 
+  ggplot(aes( n10, color = chain)) + 
+  geom_density() + 
+  theme(legend.position = "bottom") + 
+  labs(title = "Distribution of n10 (real n10 = 1)")
+```
+
+Accuracy of nks for all 6 chains:
+```{r, eval = F}
+all_chain_ns <- all_chains %>% select(-mu, -tau)  %>% pivot_longer(!c(iteration, chain), names_to = "cluster")
+real_ns <- setNames(real_ns, paste0("n", 1:q))
+modes <- all_chain_ns %>% add_count(chain, cluster, value) %>% group_by(chain, cluster) %>% mutate(mode = value[which.max(n)], real_n = real_ns[cluster]) %>% ungroup()
+
+distinct_modes <- modes %>% distinct(chain, cluster, mode, real_n)
+```
+```{r, include = F, eval = F}
+save(all_chain_ns, real_ns, modes, distinct_modes, file = "long_Gibbs_samples.RData")
+load("long_Gibbs_samples.RData")
+```
+
+
+```{r}
+distinct_modes %>% group_by(chain) %>% summarise(accuracy = sum(mode == real_n)/n())
+```
+
+```{r}
+ggplot(distinct_modes, aes(real_n, mode)) + geom_point(alpha = 0.5) + facet_wrap(~chain) + labs(x = "real n_k", y = "mode of n_k")
+```
+
+## Convergence statistics
+To assess the convergence of the chains, I calculated $\hat{R}$, bulk effective sample size (ESS), tail effective sample size, and autocorrelation based on this [vignette](https://cran.r-project.org/web/packages/bayesplot/vignettes/visual-mcmc-diagnostics.html). $\hat{R}$ measures the ratio of the average variance of draws within each chain to the variance of the pooled draws across chains; if all chains are at equilibrium, these will be the same and $\hat{R}$ will be one. The effective sample size is an estimate of the number of independent draws from the posterior distribution of the estimand of interest. The larger the ratio of $n_{eff}$ to $N$, the better. In this case, $N$ is 95,000 because I ran the chains for 100,000 iterations with a burn-in of 5,000. Bulk-ESS is related to efficiency of mean and median estimates and tail-ESS is related to the efficiency of the variance and quantile estimates of the posterior distribution. Autocorrelation indicates how related sequential draws of the posterior distribution are.
+
+```{r, eval = F}
+get_convergence_stats <- function(data){
+  sims <- data %>%
+    pivot_wider(names_from = chain, values_from = value) %>%
+    select(-iteration) %>% as.matrix
+
+  return(tibble(Rhat = Rhat(sims), ESS_bulk = ess_bulk(sims), ESS_tail = ess_tail(sims)))
+}
+
+convergence <- all_chains %>% 
+  pivot_longer(!c(chain, iteration)) %>% 
+  group_by(name) %>% nest() %>% 
+  mutate(data = future_map(data, ~get_convergence_stats(.x))) %>% 
+  unnest(cols = c(data))
+
+```
+
+```{r, include = F, eval = F}
+saveRDS(convergence, file = "convergence_stats.rds")
+convergence <- readRDS("convergence_stats.rds")
+```
+
+
+### Rhat
+All Rhat values are very close to 1, indicating that the chains are at equilibrium.
+```{r}
+mcmc_rhat(convergence$Rhat) 
+```
+
+### Effective sample size
+
+The bulk-ESS for all ns is greater than the actual sample size. For mu and tau, it is less. The tail-ESS is greater than the actual sample size for all parameters.
+
+```{r}
+mcmc_neff(convergence$ESS_bulk/95000) + ggtitle("Bulk Effective Sample Size Ratio")
+mcmc_neff(convergence$ESS_tail/95000) + ggtitle("Tail Effective Sample Size Ratio")
+```
+
+
+### Autocorrelation
+There is a decent amount of autocorrelation for the mean and tau. If we thin the chain, we can reduce this but based on [this post](http://doingbayesiandataanalysis.blogspot.com/2011/11/thinning-to-reduce-autocorrelation.html), I don't think we need to worry about it.
+
+```{r}
+mu_array <- all_chains %>% select(iteration, chain, mu) %>% pivot_wider(names_from = chain, values_from = mu) %>% select(-iteration) %>% as.matrix()
+tau_array <- all_chains %>% select(iteration, chain,tau) %>% pivot_wider(names_from = chain, values_from = tau) %>% select(-iteration) %>% as.matrix()
+n1_array <- all_chains %>% select(iteration, chain,n1) %>% pivot_wider(names_from = chain, values_from =n1) %>% select(-iteration) %>% as.matrix()
+
+params <- array(dim = c(nrow(mu_array), ncol(mu_array), 3), dimnames = list(rep("", nrow(mu_array)), rep("", ncol(mu_array)), c("mu", "tau", "n1")))
+params[,,1] <- mu_array
+params[,,2] <- tau_array
+params[,,3] <- n1_array
+
+mcmc_acf(params) + ggtitle("Autocorrelation")
+mcmc_acf(params[seq(1, nrow(mu_array), by = 10),,]) + ggtitle("Thinned Autocorrelation")
+```
+
+## Exploring different initial conditions for nk
+Above, we define the initial condition of $n_k$ as $I_k/\mu^0$. What if we provide initial guesses that are totally wrong?
+
+```{r, eval = F}
+tau0 <- 1e-4
+mu0 <- 2000
+ns <- sample(1:10, q, replace = T) # real data are only simulated with n = 1:4
+chain7 <- run_gibbs(tau0, mu0, I, 10000, ns = ns)
+```
+
+```{r}
+tau0 <- 1e-4
+mu0 <- real_mu
+ns <- sample(1:10, q, replace = T) # real data are only simulated with n = 1:4
+chain8 <- run_gibbs(tau0, mu0, I, 10000, ns = ns)
+```
+
+```{r}
+tau0 <- 1e-4
+mu0 <- 2000
+# ns <- sample(1:10, q, replace = T) # real data are only simulated with n = 1:4
+chain9 <- run_gibbs(tau0, mu0, I, 1000, ns = ns)
+```
+
+```{r}
+chain9  %>% ggplot(aes(iteration, mu)) + geom_line() + geom_hline(yintercept = real_mu) + labs(title = "Trace of mu") + ylim(c(0,1000))
+```
+```{r}
+tau0 <- 1e-4
+mu0 <- 2000
+ns <- sample(1:10, q, replace = T) # real data are only simulated with n = 1:4
+chain10 <- run_gibbs(tau0, mu0, I, 1000, ns = ns)
+```
+
+```{r}
+tau0 <- 1e-4
+mu0 <- 2000
+ns <- sample(1:10, q, replace = T) # real data are only simulated with n = 1:4
+chain11 <- run_gibbs(tau0, mu0, I, 1000, ns = ns)
+```
+
+
+```{r}
+rbind(chain7 %>% filter(iteration <= 1000), chain8 %>% filter(iteration <= 1000), chain9, chain10, chain11) %>% mutate(chain = rep(c("chain7", "chain8", "chain9", "chain10", "chain11"), each = 1000)) %>% ggplot(aes(iteration, mu, color = chain)) + geom_line() + geom_hline(yintercept = real_mu) + labs(title = "Trace of mu") + ylim(c(0,1000))
+```
+
+```{r}
+rbind(chain7 %>% filter(iteration <= 1000), chain8 %>% filter(iteration <= 1000), chain9, chain10, chain11) %>% mutate(chain = rep(c("chain7", "chain8", "chain9", "chain10", "chain11"), each = 1000)) %>% ggplot(aes(iteration, 1/tau, color = chain)) + geom_line() + geom_hline(yintercept = real_sigma2) + labs(title = "Trace of sigma")
+```
+
+```{r}
+chain7 %>% ggplot(aes(iteration, n1)) + geom_line() + ggtitle("Trace of n1")
+```
+
+```{r}
+long_ns <- chain7 %>% select(iteration, starts_with("n")) %>% pivot_longer(!iteration) 
+real_ns <- setNames(real_ns, paste0("n", 1:q))
+modes2 <- long_ns %>% count(name, value) %>% group_by(name) %>% filter(n == max(n)) %>% mutate(real_n = real_ns[name]) %>% rename(mode = value) %>% ungroup
+
+modes2 %>% summarise(accuracy = sum(mode == real_n)/nrow(.))
+
+long_ns %>% merge(modes2) %>% 
+  ggplot(aes(value, group = name, color = real_n == mode)) + 
+  geom_density(show.legend = F) + 
+  facet_grid(real_n~mode, labeller = "label_both", scales = "free_y") + 
+  labs(x = "nk", title = "Posterior probabilities for nks, stratified by mode and real n") +
+  geom_text(data = modes2 %>% count(real_n, mode), aes(Inf, Inf, label = n), hjust = 2, vjust = 2, inherit.aes = F)
+```
+
