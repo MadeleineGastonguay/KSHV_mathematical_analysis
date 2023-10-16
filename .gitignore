@@ -3,3 +3,6 @@
 .RData
 .Ruserdata
 ~$*
+results/simulations/old/*
+scripts/old_09_29_2023/*
+results/old/*
