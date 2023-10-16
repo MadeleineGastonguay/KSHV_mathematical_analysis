@@ -188,14 +188,18 @@ extinction_3epi_df <- 1:nrow(param_grid) %>%
 extinction_3epi_df_long <- pivot_extinction(extinction_3epi_df) %>% 
   group_by(time, trial, Pr = pRep, Ps = pSeg) %>% 
   mutate(total_cells = sum(number_of_cells)) %>% 
-  ungroup %>% mutate(frac = number_of_cells/total_cells)
+  ungroup %>% mutate(frac = number_of_cells/total_cells) %>% 
+  arrange(desc(Pr), Ps) %>% 
+  mutate(Pr = paste0(Pr*100, "%"),
+         Ps = paste0(Ps*100, "%"),
+         Pr = fct_inorder(factor(Pr)),
+         Ps = fct_inorder(factor(Ps))) 
 
 
 # Plot distribution of episomes per cell over time
 p1 <- extinction_3epi_df_long %>% 
-  arrange((desc(Pr))) %>% mutate(Pr = fct_inorder(factor(Pr))) %>% 
   ggplot(aes(time, frac, color = episomes_per_cell, group = interaction(trial, episomes_per_cell))) + 
-  geom_line(alpha = 0.25) +  
+  geom_line(alpha = 0.25) +
   guides(color = guide_legend(override.aes = list(alpha = 1))) + 
   ggh4x::facet_grid2(Pr ~ Ps, labeller = "label_both", scales = "free_x", independent = "x") + 
   labs(x = "time (generations)", y = "fraction of cell population", color = "episomes per cell")
@@ -206,11 +210,10 @@ ggsave(here("results", "simulations", "extinction_3epi_lines.png"), p1, width = 
 averages <- extinction_3epi_df_long %>% 
   mutate(episomes_per_cell = as.numeric(as.character(episomes_per_cell))) %>% 
   group_by(time = round(time,1), Pr, Ps, trial) %>% 
-  summarise(avg = sum(number_of_cells*episomes_per_cell)/sum(number_of_cells))
+  summarise(avg = sum(number_of_cells*episomes_per_cell)/sum(number_of_cells)) %>% 
+  ungroup()
 
 p2.1 <- averages %>% 
-  ungroup %>% 
-  arrange(desc(Pr)) %>% mutate(Pr = fct_inorder(factor(Pr))) %>% 
   ggplot(aes(time, avg, group = trial)) + 
   geom_line(alpha = 0.25, color = "gray") +
   ggh4x::facet_grid2(Pr ~ Ps, labeller = "label_both", scales = "free_x", independent = "x") + 
@@ -219,8 +222,6 @@ p2.1 <- averages %>%
 ggsave(here("results", "simulations", "extinction_3epi_average_epi_freex.png"), p2.1, width = 8, height = 7)
 
 p2.2 <- averages %>% 
-  ungroup %>% 
-  arrange(desc(Pr)) %>% mutate(Pr = fct_inorder(factor(Pr))) %>% 
   ggplot(aes(time, avg, group = trial)) + 
   geom_line(alpha = 0.25, color = "gray") +
   facet_grid(Pr ~ Ps, labeller = "label_both") +
@@ -236,7 +237,11 @@ time_to_extinction <- 1:nrow(param_grid) %>%
 p3.1 <- time_to_extinction %>% 
   rename(Pr = pRep, Ps = pSeg) %>% 
   filter(Ps*Pr != 1) %>%
-  arrange((desc(Pr))) %>% mutate(Pr = fct_inorder(factor(Pr))) %>% 
+  arrange(desc(Pr), Ps) %>% 
+  mutate(Pr = paste0(Pr*100, "%"),
+         Ps = paste0(Ps*100, "%"),
+         Pr = fct_inorder(factor(Pr)),
+         Ps = fct_inorder(factor(Ps))) %>% 
   ggplot(aes(ExtinctionTime)) + 
   geom_histogram(bins = 30, aes(y = after_stat(density))) + 
   facet_grid(Pr ~ Ps, labeller = "label_both", scales = "free_y") +
@@ -247,7 +252,11 @@ ggsave(here("results", "simulations", "time_to_exinction_3epi.png"), p3.1, width
 p3.2 <- time_to_extinction %>% 
   rename(Pr = pRep, Ps = pSeg) %>% 
   filter(Ps*Pr != 1) %>%
-  arrange((desc(Pr))) %>% mutate(Pr = fct_inorder(factor(Pr))) %>% 
+  arrange(desc(Pr), Ps) %>% 
+  mutate(Pr = paste0(Pr*100, "%"),
+         Ps = paste0(Ps*100, "%"),
+         Pr = fct_inorder(factor(Pr)),
+         Ps = fct_inorder(factor(Ps))) %>% 
   ggplot(aes(ExtinctionTime)) + 
   geom_histogram(bins = 30, aes(y = after_stat(density))) + 
   ggh4x::facet_grid2(Pr ~ Ps, labeller = "label_both", scales = "free", independent = "x") +

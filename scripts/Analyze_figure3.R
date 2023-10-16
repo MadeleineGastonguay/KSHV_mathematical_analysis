@@ -36,8 +36,12 @@ data <- load_data(mother_cell_file, daughter_cell_file)
 daughter_cell_data <- data$daughter_cell_data
 mother_cell_data <- data$mother_cell_data
 
-Figure3_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder, overwrite = T)
+Figure3_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder)
 
 Figure3_results$MLE_grid$estimates
 
 make_plots(Figure3_results, daughter_cell_data, mother_cell_data, results_folder)
+
+daughter_cell_samples <- Figure3_results$daughter_cell_samples
+figures <- figures(daughter_cell_data, mother_cell_data, daughter_cell_samples, results_folder)
+

@@ -45,5 +45,6 @@ Figure2_results$MLE_grid$estimates
 
 make_plots(Figure2_results, daughter_cell_data, mother_cell_data, results_folder)
 
-
+daughter_cell_samples <- Figure2_results$daughter_cell_samples
+figures <- figures(daughter_cell_data, mother_cell_data, daughter_cell_samples, results_folder)
 

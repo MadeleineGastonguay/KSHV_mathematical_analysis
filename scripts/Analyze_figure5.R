@@ -41,3 +41,7 @@ Figure5_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_fo
 Figure5_results$MLE_grid$estimates
 
 make_plots(Figure5_results, daughter_cell_data, mother_cell_data, results_folder)
+
+daughter_cell_samples <- Figure5_results$daughter_cell_samples
+figures <- figures(daughter_cell_data, mother_cell_data, daughter_cell_samples, results_folder)
+

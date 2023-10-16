@@ -42,6 +42,9 @@ Figure6_results$MLE_grid$estimates
 
 make_plots(Figure6_results, daughter_cell_data, mother_cell_data, results_folder)
 
+daughter_cell_samples <- Figure6_results$daughter_cell_samples
+figures <- figures(daughter_cell_data, mother_cell_data, daughter_cell_samples, results_folder)
+
 all_chains <- Figure6_results$all_chains
 
 convergence <- Figure6_results$convergence_metrics
@@ -61,4 +64,3 @@ convergence %>%
   filter(value < 50000) %>% 
   ggplot(aes(value, y = metric, color = set)) + 
   geom_boxplot() 
-
