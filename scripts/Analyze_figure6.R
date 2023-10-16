@@ -22,7 +22,7 @@ source(here("scripts", "run_pipeline.R"))
 # Script inputs
 
 # Folder for results
-results_folder <- here("results", "Figure_6_updated")
+results_folder <- here("results", "Figure_6_different_mean")
 
 # Daughter cell intensity data
 daughter_cell_file <- "Fig6 dividing cells.xlsx"
@@ -36,7 +36,7 @@ data <- load_data(mother_cell_file, daughter_cell_file)
 daughter_cell_data <- data$daughter_cell_data
 mother_cell_data <- data$mother_cell_data
 
-Figure6_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder, overwrite = T)
+Figure6_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder, same_mu = F)
 
 Figure6_results$MLE_grid$estimates
 
