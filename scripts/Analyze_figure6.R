@@ -31,10 +31,10 @@ daughter_cell_file <- "Fig6 dividing cells.xlsx"
 mother_cell_file <- "Fig6 Non dividing cells.xlsx"
 #####
 
-data <- load_data(mother_cell_file, daughter_cell_file)
+Figure6_data <- load_data(mother_cell_file, daughter_cell_file)
 
-daughter_cell_data <- data$daughter_cell_data
-mother_cell_data <- data$mother_cell_data
+daughter_cell_data <- Figure6_data$daughter_cell_data
+mother_cell_data <- Figure6_data$mother_cell_data
 
 Figure6_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder, same_mu = F)
 
@@ -64,3 +64,13 @@ convergence %>%
   filter(value < 50000) %>% 
   ggplot(aes(value, y = metric, color = set)) + 
   geom_boxplot() 
+
+
+daughter_cell_data %>% left_join(modes) %>% 
+  ggplot(aes( total_cluster_intensity, y = "")) + 
+  geom_boxplot() + geom_jitter(aes(color = as.factor(mode), shape = mother_cell_id == "Cell 16"), size = 3) + 
+  labs(x = "Total Intensity of LANA dot", y = "Live KSHV Daughter Cells", color = "Estimated Number of Episomes in LANA dot") + 
+  theme(legend.position = "bottom") + scale_color_manual(values=safe_colorblind_palette) + 
+  scale_shape_manual(values = c(19, 8)) + 
+  guides(shape = "none")
+  

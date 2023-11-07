@@ -544,9 +544,8 @@ make_plots <- function(pipeline_output, daughter_cell_data, mother_cell_data, re
          color = "Min # episome in cluster",
          x = "Total  Cluster Intensity") + 
     theme(legend.position = c(1,0), legend.justification = c(1,0), legend.background = element_blank()) + 
-    facet_wrap(~set) + 
+    facet_wrap(~set) +
     scale_color_manual(values = safe_colorblind_palette)
-  
   
   # look at posterior probabilities
   temp_df <- merge(daughter_cell_samples, mother_cell_samples, by = c("chain", "iteration")) %>% 
@@ -831,8 +830,8 @@ figures <- function(daughter_cell_data, mother_cell_data, daughter_cell_samples,
     ggplot(aes(daughter_1, daughter_2)) + 
     geom_abline(color = "gray", lty = "dashed") + 
     geom_point(size = 3) + 
-    labs(x = "Total intensity of daughter cell with greater intensity",
-         y = "Total intensity of daughter cell with less intensity") + 
+    labs(x = "Total dot intensity of daughter cell with greater intensity",
+         y = "Total dot intensity of daughter cell with less intensity") + 
     tune::coord_obs_pred() 
   
   
@@ -848,7 +847,7 @@ figures <- function(daughter_cell_data, mother_cell_data, daughter_cell_samples,
     theme(legend.position = c(1,1), legend.justification = c(1,0.9),
           legend.background = element_blank(), legend.title = element_blank())  +
     guides(color = "none") +
-    labs(x = "Total intensity in cell(s)") +
+    labs(x = "Total dot intensity") +
     scale_color_manual(values = safe_colorblind_palette) +
     scale_fill_manual(values = safe_colorblind_palette) 
   
@@ -861,7 +860,7 @@ figures <- function(daughter_cell_data, mother_cell_data, daughter_cell_samples,
     mutate(pair = fct_inorder(pair)) %>% 
     ggplot(aes(pair, n)) +
     geom_bar(stat = "identity") +
-    labs(x = "Number of of episomes in daughter cell pairs",
+    labs(x = "Estimated number of of episomes in daughter cell pairs",
          y = "Number of occurrences") + 
     # scale_fill_manual(values = rev(safe_colorblind_palette[2:11])) +
     theme(legend.position = "none")

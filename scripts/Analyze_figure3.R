@@ -31,10 +31,10 @@ daughter_cell_file <- "Fig3 dividing cells.xlsx"
 mother_cell_file <- "Fig3 Non dividing cells.xlsx"
 #####
 
-data <- load_data(mother_cell_file, daughter_cell_file)
+Figure3_data <- load_data(mother_cell_file, daughter_cell_file)
 
-daughter_cell_data <- data$daughter_cell_data
-mother_cell_data <- data$mother_cell_data
+daughter_cell_data <- Figure3_data$daughter_cell_data
+mother_cell_data <- Figure3_data$mother_cell_data
 
 Figure3_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder)
 

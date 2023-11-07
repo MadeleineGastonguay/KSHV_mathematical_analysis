@@ -291,6 +291,22 @@ if(!rerun){
   save(extinction_3epi, param_grid, 
        averages, time_to_extinction,
        file = here("results", "simulations", "constant_pop_3epi.RData"))
+  
+  # save(extinction_3epi,
+  #      file = here("results", "simulations", "constant_pop_3epi_extinction.RData"))
+  # 
+  # save(param_grid,
+  #      file = here("results", "simulations", "constant_pop_3epi_param_grid.RData"))
+  # 
+  # save(extinction_3epi_df_long,
+  #      file = here("results", "simulations", "constant_pop_3epi_extinction_df.RData"))
+  # 
+  # save(averages,
+  #      file = here("results", "simulations", "constant_pop_3epi_averages.RData"))
+  # 
+  # save(time_to_extinction,
+  #      file = here("results", "simulations", "constant_pop_3epi_averages.RData"))
+  
 }
 
 

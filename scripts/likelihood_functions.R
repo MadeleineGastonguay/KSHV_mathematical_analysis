@@ -19,7 +19,7 @@ sim_one_cell <- function(X0, Pr, Ps, id){
   X1 <- s + 2*k + j
   X2 <- X0 + r - (s + 2*k + j)
   
-  data.frame(r, s, k, j, X1, X2)
+  data.frame(r, s, k, j, X1 = max(X1, X2), X2 = min(X1, X2))
 }
 
 # Function to simulate multiple cells:
@@ -63,12 +63,15 @@ likelihood <- function(X1, X2, X0, Pr, Ps){
 
 # Function to find the parameters Pr and Ps that maximize the likelihood of the observed data
 calculate_maximum_likelihood <- function(data, Pr_values, Ps_values){
-  
-  # Define grid of parameter combinations to test
-  parameter_grid <- expand_grid(Pr = Pr_values, Ps = Ps_values)
+  # data will have a column for id, X0, X1, and X2
   
   # Function to calculate likelihood for a given observed data
-  get_likelihood <- function(data, parameter_grid){
+  get_likelihood <- function(data, Pr_values, Ps_values){
+    
+    
+    # Set up parameters (Pr, Ps, and X0) to test data with
+    parameter_grid <- expand_grid(Pr = Pr_values, Ps = Ps_values)
+    
     # Set up a dataframe of likelihoods to calculate
     # Note that we only calculate the likelihood of the observed data once given each Pr and Ps since all observations in this "chunk" are the same
     parameter_grid <- expand_grid(parameter_grid, data %>% distinct(X0, X1, X2))
@@ -76,22 +79,67 @@ calculate_maximum_likelihood <- function(data, Pr_values, Ps_values){
     likelihoods <- parameter_grid %>% 
       # Calculate likelihood at each parameter combination
       bind_cols(pmap_df(., likelihood)) %>% 
-      # Calculate the log likelihood, multiplying by the number of observations with the same data to get the likelihood of observing all of them
-      mutate(log_likelihood = log(likelihood)*nrow(data))
-    likelihoods  
+      group_by(Pr, Ps) %>%
+      summarise(log_likelihood = log(sum(likelihood))*nrow(data)) %>%
+      ungroup
+    likelihoods
   }
   
   # Nest the data frame to observations with the same values
-  data %>% nest(data = c(X0, X1, X2, id)) %>% 
+  data %>% 
+    # make sure X1 is larger number of episomes
+    mutate(temp_X1 = ifelse(X1 > X2, X1, X2), temp_X2 = ifelse(X1 > X2, X2, X1)) %>% 
+    select(-X1, -X2) %>% 
+    rename(X1 = temp_X1, X2 = temp_X2) %>% 
+    mutate(outcome = paste(X0, X1, X2, sep = "_")) %>% 
+    nest(data = c(X0, X1, X2, id)) %>% 
     # For each set of observed data, calculate the likelihood at all combinations of Pr and Ps
-    mutate(l = map(data, get_likelihood, parameter_grid)) %>%  pull(l) %>% 
+    mutate(l = map(data, get_likelihood, Pr_values, Ps_values)) %>%  pull(l) %>% 
     # Pull together the results for each observed value
     bind_rows %>% group_by(Pr, Ps) %>% 
     # Add up log likelihoods to get likelihood of observing all the data given Pr and Ps
-    summarise(log_likelihood = sum(log_likelihood)) %>% 
+    summarise(log_likelihood = sum(log_likelihood))%>% 
     ungroup()
   
 }
+# calculate_maximum_likelihood <- function(data, Pr_values, Ps_values){
+#   
+#   # Define grid of parameter combinations to test
+#   parameter_grid <- expand_grid(Pr = Pr_values, Ps = Ps_values)
+#   
+#   # Function to calculate likelihood for a given observed data
+#   get_likelihood <- function(data, parameter_grid){
+#     # Set up a dataframe of likelihoods to calculate
+#     # Note that we only calculate the likelihood of the observed data once given each Pr and Ps since all observations in this "chunk" are the same
+#     parameter_grid <- expand_grid(parameter_grid, data %>% distinct(X0, X1, X2))
+#     
+#     likelihoods <- parameter_grid %>% 
+#       # Calculate likelihood at each parameter combination
+#       bind_cols(pmap_df(., likelihood)) %>% 
+#       group_by(Pr, Ps) %>% 
+#       # Calculate the log likelihood, multiplying by the number of observations with the same data to get the likelihood of observing all of them
+#       mutate(log_likelihood = log(likelihood)*nrow(data)) %>% 
+#       ungroup
+#     likelihoods  
+#   }
+#   
+#   # Nest the data frame to observations with the same values
+#   data %>%
+#     # make sure X1 is larger number of episomes
+#     mutate(temp_X1 = ifelse(X1 > X2, X1, X2), temp_X2 = ifelse(X1 > X2, X2, X1)) %>% 
+#     select(-X1, -X2) %>% 
+#     rename(X1 = temp_X1, X2 = temp_X2) %>% 
+#     mutate(outcome = paste(X1, X2, sep = "_")) %>% 
+#     nest(data = c(X0, X1, X2, id)) %>% 
+#     # For each set of observed data, calculate the likelihood at all combinations of Pr and Ps
+#     mutate(l = map(data, get_likelihood, parameter_grid)) %>%  pull(l) %>% 
+#     # Pull together the results for each observed value
+#     bind_rows %>% group_by(Pr, Ps) %>% 
+#     # Add up log likelihoods to get likelihood of observing all the data given Pr and Ps
+#     summarise(log_likelihood = sum(log_likelihood)) %>% 
+#     ungroup()
+#   
+# }
 
 # Function to find the parameters Pr and Ps that maximize the likelihood of the observed data, given a PMF for X0
 calculate_maximum_likelihood_unknownX0 <- function(data, Pr_values, Ps_values, lambda){
@@ -201,7 +249,7 @@ run_grid_search <- function(simulated_data, viz = T, increment = 0.01, known_X0 
 }
 
 # Function to plot the output of run_grid_search()
-plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F){
+plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, error_bars = T){
   grid_search <- run_grid_search_out$grid_search
   CIs <- run_grid_search_out$estimates
   top_95 <- run_grid_search_out$top_95
@@ -214,27 +262,38 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F){
       mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
              probability = likelihood/sum(likelihood)) %>%  
       ggplot(aes(Pr, Ps)) + 
-      geom_tile(aes(fill = probability)) 
+      geom_raster(aes(fill = probability)) 
   }else{
     grid_search_plot <- grid_search %>% 
       ggplot(aes(Pr, Ps)) + 
-      geom_tile(aes(fill = log_likelihood)) 
+      geom_raster(aes(fill = log_likelihood)) 
   }
   
+  Pr_confidence_boundary <- top_95 %>% group_by(Ps) %>% summarise(min_pr = min(Pr), max_pr = max(Pr)) %>% pivot_longer(contains("pr"), values_to = "Pr") %>% select(-name)
+  Ps_confidence_boundary <- top_95 %>% group_by(Pr) %>% summarise(min_ps = min(Ps), max_ps = max(Ps)) %>% pivot_longer(contains("ps"), values_to = "Ps") %>% select(-name)
+  confidence_boundary <- rbind(Pr_confidence_boundary, Ps_confidence_boundary)
+  
   grid_search_plot <- grid_search_plot +
-    geom_tile(data = top_95, fill = NA, color = "black") +
-    geom_errorbarh(data = CIs, aes(y = MLE_Ps, xmin = min_Pr, xmax = max_Pr), height = 0, inherit.aes = F, color = "white") + 
-    geom_errorbar(data = CIs, aes(x = MLE_Pr, ymin = min_Ps, ymax = max_Ps), width = 0, inherit.aes = F,  color =  "white") +
-    geom_point(data = CIs, aes(MLE_Pr, MLE_Ps, color = "MLE")) +
-    scale_color_manual(values = c("black", "red")) + 
+    geom_raster(data = confidence_boundary, fill = "white", alpha = 0.7) +
+    # geom_point(data = CIs, aes(MLE_Pr, MLE_Ps, color = "MLE")) +
+    # scale_color_manual(values = c("black", "red")) + 
     labs(fill = fill_label, 
          caption = "Error Bars show 95% CI for Pr and Ps", 
          title = "Grid Search for Maximum Likelihood Estimate of Pr and Ps",
          x = "Replication Efficiency", y= "Segregation Efficiency")  + 
-    theme_classic()
+    theme_classic() + 
+    scale_fill_viridis_c(option = "magma")
+  
+  if(error_bars){
+    grid_search_plot <- grid_search_plot + 
+      geom_errorbarh(data = CIs, aes(y = MLE_Ps, xmin = min_Pr, xmax = max_Pr), height = 0, inherit.aes = F, color = "white", alpha= 0.7) +
+      geom_errorbar(data = CIs, aes(x = MLE_Pr, ymin = min_Ps, ymax = max_Ps), width = 0, inherit.aes = F,  color =  "white", alpha = 0.7) 
+  }
   
   if(simulation){
-    grid_search_plot <- grid_search_plot + geom_point(data = distinct(simulated_data, Pr, Ps),  aes(color = "Parameter Values"))  # Add actual parameter values
+    grid_search_plot <- grid_search_plot + geom_point(data = distinct(simulated_data, Pr, Ps),  aes(color = "Parameter Values")) + # Add actual parameter values
+      scale_color_manual(values = c("red")) + 
+      labs(color = "")
   }else{
     grid_search_plot <- grid_search_plot + guides(color = "none")
   }
