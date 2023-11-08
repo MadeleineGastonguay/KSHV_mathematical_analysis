@@ -372,9 +372,9 @@ run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
       n[j, k] <- sample(nks, 1, prob = nk_probs, replace =  T)
     }
     # sample mu:
-    mu[j] <- rnorm(1, sum(I/n[j,])/q, sqrt(1/(q*tau[j-1])))
+    mu[j] <- rnorm(1, sum(I)/sum(n[j,]), sqrt(1/(tau[j-1]*sum(n[j,]))))
     # sample tau:
-    tau[j] <- rgamma(1, q/2, 0.5*sum((I/n[j,]-mu[j])^2))
+    tau[j] <- rgamma(1, q/2 + 1, 0.5*(sum(I^2/n[j,]) - 2*mu[j]*sum(I) + mu[j]^2*sum(n[j,])))
   }
   
   return(cbind(iteration = 1:n_iterations, mu, tau, as.data.frame(n)))

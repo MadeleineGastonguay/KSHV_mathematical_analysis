@@ -1,4 +1,5 @@
 
+
 MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset, same_mu = T){
   
   all_chains <- pipeline_output$all_chains
@@ -111,7 +112,7 @@ MCMC_vs_data(Figure5_results, Figure5_data, file_path, "Fixed KSHV")
 MCMC_vs_data(Figure6_results, Figure6_data, file_path, "Live KSHV", same_mu = F)  
 
 certain_example <- Figure2_results$all_chains %>% filter(chain == "chain1") %>% 
-  ggplot(aes(d107, after_stat(count/sum(count)))) + geom_bar(aes(fill = sd(d107)), show.legend = F) + 
+  ggplot(aes(m38, after_stat(count/sum(count)))) + geom_bar(aes(fill = sd(m38)), show.legend = F) + 
   labs(x = "Number of episomes in LANA dot", y = "Posterior probability") +
   theme(panel.grid.minor.x = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor.y = element_blank()) +
   ylim(c(0,1)) + 

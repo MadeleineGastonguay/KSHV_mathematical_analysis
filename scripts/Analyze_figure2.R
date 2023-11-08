@@ -22,7 +22,7 @@ source(here("scripts", "run_pipeline.R"))
 # Script inputs
 
 # Folder for results
-results_folder <- here("results", "Figure_2_updated")
+results_folder <- here("results", "Figure_2_updated_pdf")
 
 # Daughter cell intensity data
 daughter_cell_file <- "Figure 2 dots new version.xlsx"
@@ -39,7 +39,7 @@ mother_cell_data <- Figure2_data$mother_cell_data
 cat(length(unique(daughter_cell_data$mother_cell_id)), "daughter cell pairs with", nrow(daughter_cell_data), "clusters\n")
 cat(length(unique(mother_cell_data$cell_id)), "non-dividing cells with", nrow(mother_cell_data), "clusters")
 
-Figure2_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder)
+Figure2_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder,overwrite = T)
 
 Figure2_results$MLE_grid$estimates
 

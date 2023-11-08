@@ -22,7 +22,7 @@ source(here("scripts", "run_pipeline.R"))
 # Script inputs
 
 # Folder for results
-results_folder <- here("results", "Figure_5_updated")
+results_folder <- here("results", "Figure_5_updated_pdf")
 
 # Daughter cell intensity data
 daughter_cell_file <- "Fig5 dividing cells.xlsx"
