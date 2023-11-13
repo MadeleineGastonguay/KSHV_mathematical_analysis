@@ -120,11 +120,11 @@ set.seed(400)
 # I <- matrix(rnorm(q, real_mu*real_ns, sqrt(real_sigma2*real_ns)), ncol = q)
 
 # simulate data:
-real_mu <- 925 # based on observed data
-real_sigma2 <- 100000 # based on observed data
-real_ns <- c(rep(1,105), rep(2,33), rep(3,7), rep(4,2)) # based on observed data
-q <- length(real_ns) # number of clusters
-I <- matrix(rnorm(q, real_mu*real_ns, sqrt(real_sigma2*real_ns)), ncol = q)
+# real_mu <- 925 # based on observed data
+# real_sigma2 <- 100000 # based on observed data
+# real_ns <- c(rep(1,105), rep(2,33), rep(3,7), rep(4,2)) # based on observed data
+# q <- length(real_ns) # number of clusters
+# I <- matrix(rnorm(q, real_mu*real_ns, sqrt(real_sigma2*real_ns)), ncol = q)
 
 names(I) <- paste0("n", 1:q)
 
@@ -153,7 +153,7 @@ new_results <- rbind(new_results1 %>% mutate(chain = "chain1"),
                      new_results2 %>% mutate(chain = "chain2")) %>% 
   filter(iteration > 500)
 
-save(old_results, new_results, real_mu, real_sigma2, I, real_ns, file = "results/figure_out_MCMC.RData")
+save(old_results, new_results, real_mu, real_sigma2, I, real_ns, file = "results/figure_out_MCMC_change_prior.RData")
 
 p <- rbind(old_results %>% mutate(alg = "old"),
       new_results %>% mutate(alg = "new")) %>% 
@@ -182,9 +182,8 @@ p2 <- rbind(old_results %>% mutate(alg = "old"),
 
 ggMarginal(p2, margins = "y", groupColour = T)
 
-# convergence_test_old <- convergence_results(old_results)
-# convergence_test_really_old <- convergence_results(really_old_results)
-# convergence_test_new <- convergence_results(new_results)
+convergence_test_old <- convergence_results(old_results)
+convergence_test_new <- convergence_results(new_results)
 
 old_results1 %>% select(starts_with("n")) %>% 
   pivot_longer(everything(), names_to = "cluster", values_to = "episomes") %>% 
@@ -201,3 +200,88 @@ new_results1 %>% select(starts_with("n")) %>%
   filter(n == max(n)) %>% 
   merge(data.frame(real_ns) %>% mutate(cluster= paste0("n", 1:nrow(.)))) %>% 
   count(real_ns == episomes)
+
+# #####
+# # Try a different mu 
+# #####
+# 
+# set.seed(400)
+# 
+# # # simulate data pt 2:
+# # real_mu <- 550 # based on observed data
+# # real_sigma2 <- 10000 # based on observed data
+# # real_ns_case2 <- sample(1:5, 147, replace = T, prob = dpois(1:5, 1)/sum(dpois(1:5, 1))) # based on minimum number of episomes in fixed KSHV data
+# # q <- length(real_ns) # number of clusters
+# # I_case2 <- matrix(rnorm(q, real_mu*real_ns_case2, sqrt(real_sigma2*real_ns_case2)), ncol = q)
+# # 
+# # names(I_case2) <- paste0("n", 1:q)
+# 
+# #####
+# # Apply new and old samplers and compare results
+# #####
+# n_iterations <- 1000
+# tau0 <- 1/real_sigma2
+# mu0 <- 1000
+# # really_old_results1 <- run_gibbs_really_old(tau0, mu0, I, n_iterations)
+# old_results1_case2 <- run_gibbs_old(tau0, mu0, I_case2, n_iterations)
+# new_results1_case2 <- run_gibbs_new(tau0, mu0, I_case2, n_iterations)
+# 
+# tau0 <- 1e-4
+# mu0 <- 300
+# # really_old_results2 <- run_gibbs_really_old(tau0, mu0, I, n_iterations)
+# old_results2_case2 <- run_gibbs_old(tau0, mu0, I_case2, n_iterations)
+# new_results2_case2 <- run_gibbs_new(tau0, mu0, I_case2, n_iterations)
+# 
+# 
+# old_results_case2 <- rbind(old_results1_case2 %>% mutate(chain = "chain1"),
+#                            old_results2_case2 %>% mutate(chain = "chain2")) %>% 
+#   filter(iteration > 500)
+# 
+# new_results_case2 <- rbind(new_results1_case2 %>% mutate(chain = "chain1"),
+#                            new_results2_case2 %>% mutate(chain = "chain2")) %>% 
+#   filter(iteration > 500)
+# 
+# save(old_results_case2, new_results_case2, real_mu, real_sigma2, I_case2, real_ns_case2, file = "results/figure_out_MCMC_case2_change_prior.RData")
+# 
+# p_case2 <- rbind(old_results_case2 %>% mutate(alg = "old"),
+#                  new_results_case2 %>% mutate(alg = "new")) %>% 
+#   # really_old_results %>% mutate(alg = "really old")) %>% 
+#   ggplot(aes(iteration, mu, color= interaction(chain, alg))) + 
+#   geom_point(shape = NA) + 
+#   geom_line() + 
+#   geom_hline(yintercept = real_mu) + 
+#   ylim(c(0, max(c(old_results$mu, new_results$mu, real_mu)))) +
+#   theme(legend.position = "bottom")
+# # facet_wrap(~alg)
+# 
+# ggMarginal(p_case2, margins = "y", groupColour = T)
+# 
+# p2_case2 <- rbind(old_results_case2 %>% mutate(alg = "old"),
+#                   new_results_case2 %>% mutate(alg = "new")) %>% 
+#   # really_old_results %>% mutate(alg = "really old")) %>%
+#   ggplot(aes(iteration, 1/tau, color= interaction(chain, alg))) + 
+#   geom_line() + 
+#   geom_point(shape = NA) +
+#   geom_hline(yintercept = real_sigma2) +
+#   theme(legend.position = "bottom") +
+#   ylim(c(0, max(c(1/old_results$tau, 1/new_results$tau, real_sigma2)))) + 
+#   labs(y = "sigma^2")
+# # facet_wrap(~alg)
+# 
+# ggMarginal(p2_case2, margins = "y", groupColour = T)
+# 
+# old_results1_case2 %>% select(starts_with("n")) %>% 
+#   pivot_longer(everything(), names_to = "cluster", values_to = "episomes") %>% 
+#   count(cluster, episomes) %>% 
+#   group_by(cluster) %>% 
+#   filter(n == max(n)) %>% 
+#   merge(data.frame(real_ns_case2) %>% mutate(cluster= paste0("n", 1:nrow(.)))) %>% 
+#   count(real_ns == episomes)
+# 
+# new_results1_case2 %>% select(starts_with("n")) %>% 
+#   pivot_longer(everything(), names_to = "cluster", values_to = "episomes") %>% 
+#   count(cluster, episomes) %>% 
+#   group_by(cluster) %>% 
+#   filter(n == max(n)) %>% 
+#   merge(data.frame(real_ns_case2) %>% mutate(cluster= paste0("n", 1:nrow(.)))) %>% 
+#   count(real_ns == episomes)

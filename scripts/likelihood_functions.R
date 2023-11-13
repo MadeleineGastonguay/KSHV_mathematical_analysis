@@ -330,7 +330,8 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, erro
 
 # function to get the un-normalized probability of n
 log_likelihood_n <- function(n, mu, sigma2, I){ 
-  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dpois(n, 1))
+  # log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dpois(n, 1))
+  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dgeom(n, 0.3))
 }
 
 # function to run Gibbs sampling
