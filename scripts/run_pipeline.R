@@ -16,9 +16,8 @@ require(rstan)
 # for fitting a poisson distribution
 require(MASS)
 require(furrr)
-library(furrr)
-library(purrr)
-library(foreach)
+require(purrr)
+require(foreach)
 
 
 select <- dplyr::select
@@ -61,7 +60,7 @@ load_data <- function(mother_cell_file, daughter_cell_file){
 
 run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder, 
                          n_iterations = 100000, burn_in = 5000, MLE_n_samples = 100, 
-                         same_mu = T, overwrite = F){
+                         same_mu = T, overwrite = F, n_prior = list("pois", 1)){
   
   # Make results folder
   if(!file.exists(results_folder)) dir.create(results_folder, showWarnings = F)
@@ -100,8 +99,8 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
       # run 2 chains
       intensities <- intensity_data$total_cluster_intensity
       names(intensities) <- intensity_data$cluster_id
-      chain1 <- run_gibbs(tau0, mu0[1], intensities, n_iterations)
-      chain2 <- run_gibbs(tau0, mu0[2], intensities, n_iterations)
+      chain1 <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior)
+      chain2 <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior)
     }else{
       # Case when the mean intensity differs between mother and daughter cells
       cat("\nRunning Gibbs separately for mother and daughter cells")
@@ -117,8 +116,8 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
       # start with daughters
       intensities <- daughter_cell_data$total_cluster_intensity
       names(intensities) <- daughter_cell_data$cluster_id
-      chain1_d <- run_gibbs(tau0, mu0[1], intensities, n_iterations)
-      chain2_d <- run_gibbs(tau0, mu0[2], intensities, n_iterations)
+      chain1_d <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior)
+      chain2_d <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior)
       
       ICs <- mother_cell_data %>% 
         mutate(ratio = total_cluster_intensity/min_episome_in_cluster) %>% filter(!is.na(ratio)) %>% pull(ratio) %>% summary
@@ -132,8 +131,8 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
       # start with daughters
       intensities <- mother_cell_data$total_cluster_intensity
       names(intensities) <- mother_cell_data$cluster_id
-      chain1_m <- run_gibbs(tau0, mu0[1], intensities, n_iterations)
-      chain2_m <- run_gibbs(tau0, mu0[2], intensities, n_iterations)
+      chain1_m <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior)
+      chain2_m <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior)
       
       chain1 <- merge(chain1_d, chain1_m, by = "iteration", suffixes = c("_d", "_m"))
       chain2 <- merge(chain2_d, chain2_m, by = "iteration", suffixes = c("_d", "_m"))

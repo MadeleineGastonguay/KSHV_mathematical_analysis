@@ -329,9 +329,14 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, erro
 
 
 # function to get the un-normalized probability of n
-log_likelihood_n <- function(n, mu, sigma2, I){ 
-  # log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dpois(n, 1))
-  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(dgeom(n, 0.3))
+log_likelihood_n <- function(n, mu, sigma2, I, n_prior){ 
+  prior_fam <- n_prior[[1]]
+  prior_param <- n_prior[[2]]
+  prior_prob <- ifelse(prior_fam == "pois", 
+                       dpois(n, prior_param)/sum(dpois(1:100, prior_param)),
+                       dgeom(n, prior_param)/sum(dgeom(1:100, prior_param))
+                       )
+  log(dnorm(I, n*mu, sqrt(n*sigma2))) + log(prior_prob)
 }
 
 # function to run Gibbs sampling
@@ -340,7 +345,8 @@ log_likelihood_n <- function(n, mu, sigma2, I){
 # I is a named vector of intensity data
 # n_iterations is the number of iterations to run for
 # ns is a named vector with the initialization for the number of episomes per cluster. If not specified, it will be calculated from the intitial estimate of mu0
-run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
+run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA, n_prior){
+  
   clusters <- names(I)
   q <- length(I)
   
@@ -367,7 +373,7 @@ run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
   for(j in 2:n_iterations){
     for(k in 1:q){
       # define the probability of each nk given observed data and other parameters
-      nk_like <- nks %>% sapply(log_likelihood_n, mu = mu[j-1], sigma2 = 1/tau[j-1], I = I[k]) # log likelihood
+      nk_like <- nks %>% sapply(log_likelihood_n, mu = mu[j-1], sigma2 = 1/tau[j-1], I = I[k], n_prior) # log likelihood
       nk_probs <- exp(nk_like - max(nk_like))/sum(exp(nk_like - max(nk_like)), na.rm = T) #probabilities
       # sample nk
       n[j, k] <- sample(nks, 1, prob = nk_probs, replace =  T)
@@ -377,7 +383,6 @@ run_gibbs <- function(tau0, mu0, I, n_iterations, ns = NA){
     # sample tau:
     tau[j] <- rgamma(1, q/2 + 1, 0.5*(sum(I^2/n[j,]) - 2*mu[j]*sum(I) + mu[j]^2*sum(n[j,])))
   }
-  
   return(cbind(iteration = 1:n_iterations, mu, tau, as.data.frame(n)))
 }
 
