@@ -173,11 +173,14 @@ fraction_over_time <- function(extinction_long, multiple = F){
 ntrials <- 100
 n_epi <- 3 
 
-# Indicator if simuilations should be rerun (TRUE) or loaded from previous run (FALSE)
+# Indicator if simulations should be rerun (TRUE) or loaded from previous run (FALSE)
 rerun <- FALSE
 
 if(!rerun){
   load(here("results", "simulations", "constant_pop_3epi.RData"))
+  
+  extinction_3epi_df <- 1:nrow(param_grid) %>% 
+    map_df(function(i) cbind(param_grid[i,], extinction_3epi[[i]]$Totals)) 
   
   extinction_3epi_df_long <- pivot_extinction(extinction_3epi_df) %>% 
     group_by(time, trial, Pr = pRep, Ps = pSeg) %>% 
@@ -250,9 +253,10 @@ if(!rerun){
     geom_line(alpha = 0.25, color = "gray") +
     facet_grid(Pr ~ Ps, labeller = "label_both") +
     scale_x_log10() +
-    labs(x = "time (generations)", y = "average number of episomes per cell") 
+    labs(x = "time (generations)", y = "average number of episomes per cell") +
+    theme(axis.text.x = element_text(angle = 45, vjust = 0.8))
   
-  ggsave(here("results", "simulations", "extinction_3epi_average_epi_logscale.png"), p2.2, width = 8, height = 7)
+  ggsave(here("results", "simulations", "extinction_3epi_average_epi_logscale.png"), p2.2, width = 9, height = 7)
   
   # Plot histograms of time to extinction
   time_to_extinction <- 1:nrow(param_grid) %>% 
@@ -388,20 +392,44 @@ trajectory_plot <- function(Pr, Ps, xlim){
     coord_cartesian(c(0,xlim)) 
 }
 
-distribution_plot1 <- function(Pr, Ps, xlim){
+distribution_plot1 <- function(Pr = "100%", Ps = "100%", xlim, facet = F, Pr_facet = "all"){
   PR <- Pr
   PS <- Ps
   
-  df <- extinction_3epi_df_long %>% 
-    filter(Pr == PR, Ps == PS) %>% 
-    group_by(time = round(time), episomes_per_cell) %>% 
-    summarise(number_of_cells = mean(number_of_cells)) 
+  if(facet){
+    df <- extinction_3epi_df_long %>% 
+      group_by(Pr, Ps, time = round(time), episomes_per_cell) %>% 
+      summarise(number_of_cells = mean(number_of_cells))  
+    if(!any(Pr_facet == "all")) df <- df %>% filter(Pr %in% Pr_facet)
+  }else{
+    df <- extinction_3epi_df_long %>% 
+      filter(Pr == PR, Ps == PS) %>% 
+      group_by(time = round(time), episomes_per_cell) %>% 
+      summarise(number_of_cells = mean(number_of_cells)) 
+  }
   
-  if(PR == "100%" & PS == "100%"){
+  if(facet){
+    if(Pr_facet == "100%"){
+      df <- df %>% rbind(data.frame(Pr = factor("100%", levels = levels(extinction_3epi_df_long$Pr)), 
+                                    Ps = factor("100%", levels = levels(extinction_3epi_df_long$Ps)), 
+                                    time = 1:750, 
+                                    episomes_per_cell = factor("3", levels = levels(extinction_3epi_df_long$episomes_per_cell)), 
+                                    number_of_cells = 1000))
+    }
+    add_zeros <- function(data, id){
+      if(id$Pr == "100%" & id$Ps == "100%") return(data)
+      return(rbind(data, 
+            data.frame(time = (max(data$time) + 1):750, 
+                       episomes_per_cell = factor("0", levels = levels(extinction_3epi_df_long$episomes_per_cell)), 
+                       number_of_cells = 1000)))
+    } 
+    
+    df <- df %>% group_by(Pr, Ps) %>% group_modify(add_zeros)
+  }else if(PR == "100%" & PS == "100%"){
     df <- df %>% rbind(data.frame(time = 1:750, episomes_per_cell = factor("3", levels = levels(extinction_3epi_df_long$episomes_per_cell)), number_of_cells = 1000))
   } 
   
-  df %>% 
+  plot <- df %>% 
     ggplot(aes(time, number_of_cells, fill = episomes_per_cell, color = episomes_per_cell)) + 
     geom_bar(position = position_fill(reverse = TRUE), stat = "identity") + 
     scale_fill_manual(values = safe_colorblind_palette) + 
@@ -411,6 +439,10 @@ distribution_plot1 <- function(Pr, Ps, xlim){
     labs(x = "Time (generations)", fill = "Episomes per cell", y = "Percent of\ncell population") +
     guides(color = "none") + 
     theme(panel.grid = element_blank())
+  
+  if(facet) plot <- plot + facet_grid(Pr ~ Ps, labeller = "label_both")
+  
+  plot
 }
 
 new_plot <- trajectory_plot(Pr = "100%", Ps = "100%", 700) +
@@ -435,6 +467,23 @@ new_plot <- trajectory_plot(Pr = "100%", Ps = "100%", 700) +
   guides(color = "none")
 
 ggsave(here("results", "simulations", "new_simulations_fig.png"), new_plot, width = 10, height = 10)
+
+supplemental_plot <- distribution_plot1(xlim = 700, facet = T, Pr_facet = "100%") + 
+  theme(axis.title.x = element_blank()) +
+  distribution_plot1(xlim = 250, facet = T, Pr_facet = "95%") + 
+  theme(strip.background.x = element_blank(), strip.text.x = element_blank(),
+        axis.title.x = element_blank()) +
+  distribution_plot1(xlim = 120, facet = T, Pr_facet = "90%") +
+  theme(strip.background.x = element_blank(), strip.text.x = element_blank(),
+        axis.title.x = element_blank()) +
+  distribution_plot1(xlim = 60, facet = T, Pr_facet = "75%") + 
+  theme(strip.background.x = element_blank(), strip.text.x = element_blank(),
+        axis.title.x = element_blank()) +
+  distribution_plot1(xlim = 30, facet = T, Pr_facet = "50%")  + 
+  theme(strip.background.x = element_blank(), strip.text.x = element_blank()) +
+  plot_layout(ncol = 1,guides = "collect")
+
+ggsave(here("results", "simulations", "supplemental_episome_distribution.png"), supplemental_plot , width = 12, height = 8)
 
 #####
 # Plot histograms with distribution of episomes in population at varying time points
@@ -585,8 +634,8 @@ sup3 <- averages %>%
             show.legend = F) 
 
 sup <- ((plot_spacer() / sup1 / plot_spacer() / sup2 / plot_spacer() + plot_layout(heights = c(0.5,4,0.5,4,0.5))) | 
-  plot_spacer() | 
-  sup3) + plot_layout(widths = c(1,0.1,1))
+          plot_spacer() | 
+          sup3) + plot_layout(widths = c(1,0.1,1))
 
 ggsave(here("results", "simulations", "supplemental_figure.png"), sup , width = 10.5, height = 10)
 
@@ -617,7 +666,7 @@ sup3.2 <- averages %>%
   theme(legend.position = "bottom")
 
 sup.2 <-( (sup1 + plot_spacer() + sup2 + plot_layout(widths = c(1, 0.1, 1), nrow = 1)) / 
-  plot_spacer() / sup3.2) + plot_layout(heights = c(1,0.1,1), ncol = 1)
+            plot_spacer() / sup3.2) + plot_layout(heights = c(1,0.1,1), ncol = 1)
 
 ggsave(here("results", "simulations", "supplemental_figure_v2.png"), sup.2 , width = 15, height = 7)
 
@@ -634,7 +683,7 @@ shannon %>%
   filter(Pr == 100, Ps == 95) %>% 
   group_by(Pr, Ps, time = round(time, 2)) %>% 
   summarise(avg = mean(H)) %>% head
-  ggplot(aes(time, avg, color = as.factor(Ps), group = Ps)) + 
+ggplot(aes(time, avg, color = as.factor(Ps), group = Ps)) + 
   geom_line() +
   # facet_wrap(~Ps, ncol = 1, labeller = "label_both") +
   scale_color_manual(values = sort(scico_palette_data("oslo", T))[c(1, 31, 51, 71, 91)]) +

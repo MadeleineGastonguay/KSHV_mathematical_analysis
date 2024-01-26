@@ -3,6 +3,8 @@
 library(tidyverse)
 library(here)
 library(furrr)
+library(scico)
+library(patchwork)
 
 source("scripts/likelihood_functions.R")
 source("scripts/run_pipeline.R")
@@ -11,20 +13,28 @@ plan(multisession(workers = 8))
 
 theme_set(theme_classic())
 
+safe_colorblind_palette <- c("#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499", 
+                             "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888")
+
+
 #####
 # Compare priors
-geom_params <- expand_grid(ns = 1:100, param = seq(0.1,1,by= 0.1)) %>% 
+geom_params <- expand_grid(ns = 1:100, param = seq(0.1,0.9,by= 0.1)) %>% 
   group_by(param) %>% 
   mutate(p = dgeom(ns, param)/sum(dgeom(1:100, param)))
 
-geom_params %>% 
-  # filter(param == 0.4 | param == 0.5) %>% 
+prior_plot <- geom_params %>% 
+  filter(param <= 0.6) %>% 
   ggplot(aes(ns, p, color = paste0("geom(", param, ")"), group = param)) + 
-  geom_line() + 
-  geom_line(aes(ns, dpois(ns, 1), color = "poisson(1)"), color = "black") + 
-  coord_cartesian(c(0,15)) + 
-  labs(color = "prior for n", caption = "poisson(1) in black for reference", 
-       x = "n_k", y= "prior probability") 
+  geom_line(size = 1) + 
+  geom_line(aes(ns, dpois(ns, 1), color = "poisson(1)"), size = 1) + 
+  scale_x_continuous(limits = c(0,10), breaks = 0:10) + 
+  labs(color = "prior for n_k", #caption = "poisson(1) in black for reference", 
+       x = "number of episomes in a cluster", y= "prior probability")  + 
+  scale_color_manual(values = c(safe_colorblind_palette[1:6], "black")) +
+  theme(legend.position = c(1,1), legend.justification = c(1,1)) 
+
+ggsave(here("results","supplemental_figures_updated_pdf_n_prior", "n_prior_plot.png"), prior_plot, width = 4, height = 3)
 
 #####
 # Simulate data similar to fixed 8TR conditions in the case when there are likely 2 episomes per cluster
@@ -146,6 +156,30 @@ all_runs %>%
   ylim(c(0, max(all_runs$mu))) + 
   labs(y = "mu")
 
+mu_plot <- all_runs %>% 
+  filter(!(prior %in% c("geom(0.2)", "geom(0.3)", "poisson(1)"))) %>% 
+  ggplot(aes(iteration, mu, color = chain)) + 
+  geom_line() + 
+  facet_wrap(~prior, nrow = 1) + 
+  geom_hline(yintercept = real_mu) + 
+  geom_text(data = data.frame(NA), aes(1100, real_mu, label = real_mu), 
+            hjust = 0, vjust = -0.1, inherit.aes = F) +
+  geom_hline(data = inferred_param %>% filter(!(prior %in% c("geom(0.2)", "geom(0.3)", "poisson(1)"))), 
+             aes(yintercept = mu), lty = "dashed") +
+  geom_text(data = inferred_param %>% filter(!(prior %in% c("geom(0.2)", "geom(0.3)", "poisson(1)"))), 
+            aes(1100, mu, label = mu), 
+            hjust = 0, vjust = 1.1, inherit.aes = F) +
+  ylim(c(0, max(all_runs$mu))) + 
+  labs(y = bquote(mu), x = "Iteration")
+
+ggsave(here("results", "supplemental_figures_updated_pdf_n_prior", "prior_sensitivity_mu.png"), mu_plot, width = 8, height = 3)
+
+
+all_runs %>% 
+  filter(prior == "geom(0.5)") %>% 
+  mutate(sigma = sqrt(1/tau)) %>% 
+  pull(sigma) %>% sd
+
 all_runs %>% 
   ggplot(aes(iteration, 1/tau, color = chain)) + 
   geom_line() + 
@@ -166,6 +200,30 @@ all_runs %>%
             hjust = 0, vjust = -0.1, inherit.aes = F) +
   ylim(c(0, max(sqrt(1/all_runs$tau)))) + 
   labs(y = "sigma")
+
+sigma_plot <- all_runs %>% 
+  filter(!(prior %in% c("geom(0.2)", "geom(0.3)", "poisson(1)")))  %>% 
+  ggplot(aes(iteration, sqrt(1/tau), color = chain)) + 
+  geom_line() + 
+  facet_wrap(~prior, nrow = 1) + 
+  geom_hline(yintercept = sqrt(real_sigma2)) + 
+  geom_text(data = data.frame(NA), aes(1100, sqrt(real_sigma2), label = sqrt(real_sigma2)), 
+            hjust = 0, vjust = -0.1, inherit.aes = F) +
+  geom_hline(data = inferred_param %>% filter(!(prior %in% c("geom(0.2)", "geom(0.3)", "poisson(1)"))) , aes(yintercept = sigma), lty = "dashed") +
+  geom_text(data = inferred_param %>% filter(!(prior %in% c("geom(0.2)", "geom(0.3)", "poisson(1)"))) , aes(1100, sigma, label = sigma), 
+            hjust = 0, vjust = 1.1, inherit.aes = F) +
+  ylim(c(0, max(sqrt(1/all_runs$tau)))) + 
+  labs(y = bquote(sigma), x = "Iteration")
+
+ggsave(here("results", "supplemental_figures_updated_pdf_n_prior", "prior_sensitivity_sigma.png"), sigma_plot, width = 8, height = 3)
+
+sensitivity_plot <- mu_plot + 
+  theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.ticks = element_blank()) + 
+  sigma_plot + 
+  theme(strip.background = element_blank(), strip.text = element_blank()) + 
+  plot_layout(ncol = 1, guides = "collect")
+
+ggsave(here("results", "supplemental_figures_updated_pdf_n_prior", "prior_sensitivity.png"), sensitivity_plot, width = 8, height = 4.5)
 
 
 convergence <- all_runs %>% 
@@ -587,3 +645,5 @@ hist(real_ns, freq = F)
 points(1:5, dgeom(1:5, 0.5)/sum(dgeom(1:100, 0.5)), col = "red")
 points(1:5, dgeom(1:5, 0.6)/sum(dgeom(1:100, 0.6)), col = "blue")
 points(1:5, dgeom(1:5, 0.4)/sum(dgeom(1:100, 0.4)), col = "green")
+
+
