@@ -57,6 +57,17 @@ likelihood <- function(X1, X2, X0, Pr, Ps){
   return(c("likelihood" = L))
 }
 
+likelihood_Pr <- function(Xtot, X0, Pr, Ps){
+  R = Xtot - X0
+  # Portion of likelihood that isn't in summation
+  if(R > X0 | R < 0){
+    L = 0
+  }else{
+    L = choose(X0, R)*Pr^R*(1-Pr)^(X0-R)
+  }
+  return(c("likelihood" = L))
+}
+
 #####
 # Grid search functions
 #####
@@ -140,6 +151,56 @@ calculate_maximum_likelihood <- function(data, Pr_values, Ps_values){
 #     ungroup()
 #   
 # }
+
+# Function to find the parameters Pr and Ps that maximize the likelihood of the observed data, given a PMF for X0
+calculate_maximum_likelihood_unknownX0 <- function(data, Pr_values, Ps_values, lambda){
+  # data will have a column for id, X1, and X2
+  
+  # Function to calculate likelihood for a given observed data
+  get_likelihood <- function(data, Pr_values, Ps_values, lambda){
+    
+    # Build PMF for X0:
+    max_X0 <- unique(data$X1 + data$X2)
+    min_X0 <- ceiling(max_X0/2)
+    PMF <- tibble(X0 = min_X0:max_X0, prob = dpois(X0, lambda)) %>% 
+      # normalize probability to sum to 1
+      mutate(prob = prob/sum(prob))
+    
+    # Set up parameters (Pr, Ps, and X0) to test data with
+    parameter_grid <- expand_grid(Pr = Pr_values, Ps = Ps_values, X0 = PMF$X0)
+    
+    # Set up a dataframe of likelihoods to calculate
+    # Note that we only calculate the likelihood of the observed data once given each Pr and Ps since all observations in this "chunk" are the same
+    parameter_grid <- expand_grid(parameter_grid, data %>% distinct(X1, X2))
+    
+    likelihoods <- parameter_grid %>% 
+      # Calculate likelihood at each parameter combination
+      bind_cols(pmap_df(., likelihood)) %>% 
+      merge(PMF) %>% 
+      mutate(likelihood = likelihood*prob) %>% 
+      group_by(Pr, Ps) %>%
+      summarise(log_likelihood = log(sum(likelihood))*nrow(data)) %>%
+      ungroup
+    likelihoods
+  }
+  
+  # Nest the data frame to observations with the same values
+  data %>% 
+    # make sure X1 is larger number of episomes
+    mutate(temp_X1 = ifelse(X1 > X2, X1, X2), temp_X2 = ifelse(X1 > X2, X2, X1)) %>% 
+    select(-X1, -X2) %>% 
+    rename(X1 = temp_X1, X2 = temp_X2) %>% 
+    mutate(outcome = paste(X1, X2, sep = "_")) %>% 
+    nest(data = c(X1, X2, id)) %>% 
+    # For each set of observed data, calculate the likelihood at all combinations of Pr and Ps
+    mutate(l = map(data, get_likelihood, Pr_values, Ps_values, lambda)) %>%  pull(l) %>% 
+    # Pull together the results for each observed value
+    bind_rows %>% group_by(Pr, Ps) %>% 
+    # Add up log likelihoods to get likelihood of observing all the data given Pr and Ps
+    summarise(log_likelihood = sum(log_likelihood))%>% 
+    ungroup()
+  
+}
 
 # Function to find the parameters Pr and Ps that maximize the likelihood of the observed data, given a PMF for X0
 calculate_maximum_likelihood_unknownX0 <- function(data, Pr_values, Ps_values, lambda){
@@ -417,4 +478,36 @@ convergence_results <- function(all_chains){
 }
 
 
+######
+# Silhouette Plots
+######
+
+# Calculate silhouette statistic
+calc_sil <- function(intensity_data, all_chains, method = "euclidean"){
+  nk <- all_chains %>% 
+    filter(chain == "chain1") %>% 
+    pivot_longer(grep("[0-9]", names(all_chains), perl = T), names_to = "cluster_id", values_to = "n_epi") %>% 
+    # pivot_longer(-c(chain, iteration, tau, mu), names_to = "cluster_id", values_to = "n_epi") %>% 
+    count(cluster_id, n_epi) %>% 
+    group_by(cluster_id) %>% 
+    filter(n == max(n)) %>% 
+    ungroup
+  
+  dat <- left_join(intensity_data, nk, by = "cluster_id")
+  I <- intensity_data$total_cluster_intensity
+  names(I) <- intensity_data$cluster_id
+  dist_matrix <- dist(I, method = method)  
+  class <- dat$n_epi
+  names(class) <- intensity_data$cluster_id
+  silhouette(class, dist_matrix)
+}
+
+# # propagate uncertainty via 100 samples of the posterior distribution
+# sample_sil <- function(df, intensity_data){
+#   nks <- df %>% pivot_longer(-c(iteration, mu, tau, chain), names_to = "cluster_id", values_to = "n_epi") 
+#   as.data.frame(calc_sil(intensity_data, nks)) %>% mutate(id = 1:nrow(.))
+# }
+# Figure2_sil <- Figure2_results$all_chains %>% filter(chain == "chain1") %>% sample_n(100) %>%
+#   group_split(iteration) %>%
+#   map_df(sample_sil, .id = "sample", intensity_data = intensity_data)
 

@@ -60,7 +60,8 @@ load_data <- function(mother_cell_file, daughter_cell_file){
 
 run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder, 
                          n_iterations = 100000, burn_in = 5000, MLE_n_samples = 100, 
-                         same_mu = T, overwrite = F, n_prior = list("pois", 1)){
+                         same_mu = T, overwrite = F, n_prior = list("pois", 1), parallel = F){
+
   
   # Make results folder
   if(!file.exists(results_folder)) dir.create(results_folder, showWarnings = F)
@@ -99,8 +100,8 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
       # run 2 chains
       intensities <- intensity_data$total_cluster_intensity
       names(intensities) <- intensity_data$cluster_id
-      chain1 <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior)
-      chain2 <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior)
+      chain1 <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior = n_prior)
+      chain2 <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior = n_prior)
     }else{
       # Case when the mean intensity differs between mother and daughter cells
       cat("\nRunning Gibbs separately for mother and daughter cells")
@@ -116,8 +117,8 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
       # start with daughters
       intensities <- daughter_cell_data$total_cluster_intensity
       names(intensities) <- daughter_cell_data$cluster_id
-      chain1_d <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior)
-      chain2_d <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior)
+      chain1_d <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior = n_prior)
+      chain2_d <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior = n_prior)
       
       ICs <- mother_cell_data %>% 
         mutate(ratio = total_cluster_intensity/min_episome_in_cluster) %>% filter(!is.na(ratio)) %>% pull(ratio) %>% summary
@@ -131,8 +132,8 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
       # start with daughters
       intensities <- mother_cell_data$total_cluster_intensity
       names(intensities) <- mother_cell_data$cluster_id
-      chain1_m <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior)
-      chain2_m <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior)
+      chain1_m <- run_gibbs(tau0, mu0[1], intensities, n_iterations, n_prior = n_prior)
+      chain2_m <- run_gibbs(tau0, mu0[2], intensities, n_iterations, n_prior = n_prior)
       
       chain1 <- merge(chain1_d, chain1_m, by = "iteration", suffixes = c("_d", "_m"))
       chain2 <- merge(chain2_d, chain2_m, by = "iteration", suffixes = c("_d", "_m"))
@@ -231,6 +232,21 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
   if(file.exists(file) & !overwrite){
     load(file)
   }else{
+    if(parallel){
+    #create the cluster
+    my.cluster <- parallel::makeCluster(2, type = "PSOCK")
+    
+    #check cluster definition (optional)
+    print(my.cluster)
+    
+    #register it to be used by %dopar%
+    doParallel::registerDoParallel(cl = my.cluster)
+    
+    #check if it is registered (optional)
+    cat("cluster registered:")
+    print(foreach::getDoParRegistered())
+    
+  }
     # randomly choose samples from the markov chain to use as inferred value of number of episomes per cell:
     samples <- sample(unique(all_chains$iteration), MLE_n_samples, replace = FALSE)
     
@@ -246,8 +262,9 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
     
     # iterate through the sampled data and apply a grid search to each one
     j <- 1
-    MLE_with_uncertainty <- foreach(i = samples, .packages = "tidyverse") %dopar% {
+    MLE_with_uncertainty <- foreach(i = samples, .packages = c("tidyverse", "here")) %dopar% {
       cat("\n", j)
+      source(here("scripts","likelihood_functions.R"))
       j <- j+1
       temp <- sampled_experimental_data %>% 
         filter(iteration == i) %>%
@@ -262,7 +279,9 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
                                           probability = likelihood/sum(likelihood))
       temp
     }
-    save(MLE_with_uncertainty, file = file)  
+    save(MLE_with_uncertainty, file = file)
+    
+    if(parallel) parallel::stopCluster(my.cluster)
   }
   
   cat("\n===")
@@ -281,12 +300,14 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
                                top_95 = MLE_with_uncertainty_CI$probs)
   
   cat("\nDone") 
-  return(list(all_chains = all_chains, 
-              daughter_cell_samples = daughter_cell_samples, 
-              mother_cell_samples = mother_cell_samples, 
-              convergence_metrics = convergence, 
-              X0_lambda = lambda, 
-              MLE_grid = MLE_uncertainty_grid))
+  
+  
+    return(list(all_chains = all_chains, 
+                daughter_cell_samples = daughter_cell_samples, 
+                mother_cell_samples = mother_cell_samples, 
+                convergence_metrics = convergence, 
+                X0_lambda = lambda, 
+                MLE_grid = MLE_uncertainty_grid))
   
 }
 
@@ -868,10 +889,9 @@ figures <- function(daughter_cell_data, mother_cell_data, daughter_cell_samples,
     intensity_scatter + pair_histogram + 
     plot_layout(ncol = 1, heights = c(1,2,1)) 
   
-  ggsave(here(results_folder, "figure.png"), figure, width = 5, height = 10)
+  # ggsave(here(results_folder, "figure.png"), figure, width = 5, height = 10)
   
   
 }
-
 
 
