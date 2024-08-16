@@ -97,7 +97,7 @@ MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset,  same_
     rename(mode = n_episomes) %>% 
     mutate(set = ifelse(grepl("d", cluster_id), "daughter", "mother"))
   
-  
+  # browser()
   if(!normalize){
     dat <- intensity_data %>% 
       merge(cluster_modes) %>% 
@@ -105,16 +105,21 @@ MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset,  same_
              min_episome_in_cluster = factor(min_episome_in_cluster, levels = 1:4))
   }else{
     if(!same_mu){
+      daughter_mean_intensity <- DescTools::Mode(round(all_chains$mu_d,1))
+      mother_mean_intensity <- DescTools::Mode(round(all_chains$mu_m,1))
+      
       dat <- intensity_data %>% 
         merge(cluster_modes) %>% 
-        mutate(total_cluster_intensity = ifelse(set == "daughter", total_cluster_intensity/DescTools::Mode(round(all_chains$mu_d,1)),
-                                                total_cluster_intensity/DescTools::Mode(round(all_chains$mu_m,1))),
+        mutate(total_cluster_intensity = ifelse(set == "daughter", total_cluster_intensity/daughter_mean_intensity,
+                                                total_cluster_intensity/mother_mean_intensity),
                set = str_to_title(paste(set, "cell")),
                min_episome_in_cluster = factor(min_episome_in_cluster, levels = 1:4))
     }else{
+      mean_intensity <- DescTools::Mode(round(all_chains$mu,1))
+      
       dat <- intensity_data %>% 
         merge(cluster_modes) %>%
-        mutate(total_cluster_intensity = total_cluster_intensity/DescTools::Mode(round(all_chains$mu,1)),
+        mutate(total_cluster_intensity = total_cluster_intensity/mean_intensity,
                set = str_to_title(paste(set, "cell")),
                min_episome_in_cluster = factor(min_episome_in_cluster, levels = 1:4))
     }
@@ -145,6 +150,7 @@ MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset,  same_
   
   if(normalize) MCMC_vs_intensity_data <- MCMC_vs_intensity_data + scale_x_continuous(breaks = 0:20)
   
+  # browser()
   intensity_data_plot <- intensity_data %>% 
     mutate(set = str_to_title(paste(set, "cell"))) %>% 
     ggplot(aes(total_cluster_intensity, shape = set, y = set)) + 
@@ -153,7 +159,22 @@ MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset,  same_
     scale_shape_manual(values = c(2,19)) + 
     labs(x = "Total intensity of LANA dot",
          title = dataset) +
-    theme(legend.position = "none", axis.title.y = element_blank())
+    theme(legend.position = "none", axis.title.y = element_blank()) + 
+    scale_y_discrete(labels = c("Daughter Cells", "Non-dividing Cells"))
+  
+  if(!same_mu){
+    intensity_data_plot <- intensity_data_plot + 
+      geom_point(data = data.frame(set = c("Daughter Cell", "Mother Cell"), mean = c(daughter_mean_intensity, mother_mean_intensity)),
+                 aes(mean, set), color = "red", size = 2, show.legend = F) + 
+      geom_vline(xintercept = daughter_mean_intensity, color = "red", alpha = 0.5) + 
+      geom_vline(xintercept = mother_mean_intensity, color = "red", alpha = 0.5)
+  }else{
+    intensity_data_plot <- intensity_data_plot + 
+      geom_point(data = . %>% group_by(set) %>% 
+                   summarise(mean = mean_intensity),
+                 aes(mean, set), color = "red", size = 2, show.legend = F) + 
+      geom_vline(xintercept = mean_intensity, color = "red", alpha = 0.5)
+  }
   
   # mode_plot <- cluster_modes %>%
   #   mutate(set = str_to_title(paste(set, "cell"))) %>%
@@ -166,8 +187,11 @@ MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset,  same_
   #   theme(legend.position = "none", axis.title.y = element_blank()) +
   #   scale_y_continuous(breaks = 0:10)
   
+  # browser()
+  
   plot <- intensity_data_plot + #plot_spacer() +
     MCMC_vs_intensity_data  +
+    theme(axis.title.y = element_text(margin = margin(r = -100, unit = "pt"))) + 
     plot_layout(ncol = 1, heights = c(1,2)) & 
     theme(legend.position = "right")
   
@@ -186,7 +210,7 @@ MCMC_vs_data <-  function(pipeline_output, data, results_folder, dataset,  same_
 }
 
 file_path <- here("results", supplemental_folder)
-dir.create(file_path)
+if(!dir.exists(file_path ))dir.create(file_path)
 
 MCMC_vs_data(Figure2_results, Figure2_data, file_path, "Fixed 8TR", normalize = T)  
 MCMC_vs_data(Figure3_results, Figure3_data, file_path, "Live 8TR", normalize = T)  
