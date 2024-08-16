@@ -37,9 +37,32 @@ daughter_cell_data <- Figure5_data$daughter_cell_data
 mother_cell_data <- Figure5_data$mother_cell_data
 
 Figure5_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder,
-                                n_prior = list("geom", 0.5), parallel = T)
+                                n_prior = list("geom", 0.5), parallel = T, just_Pr = F)
+
+# Figure5_results$MLE_grid$grid_search %>% group_by(Pr) %>% summarise(probability = sum(probability)) %>% 
+#   ggplot(aes(Pr, probability)) + geom_line(aes(color = "joint estimation")) +
+#   geom_line(data = Figure5_results$MLE_Pr_grid$grid_search, aes(color = "single estimation"))
 
 Figure5_results$MLE_grid$estimates
+
+
+## Adjust confidence intervals to be marginal:
+
+Figure5_results$MLE_grid$grid_search %>%
+  group_by(Pr) %>%
+  summarise(probability = sum(probability)) %>% 
+  arrange(desc(probability)) %>% 
+  mutate(cum_sum = cumsum(probability)) %>% 
+  filter(cum_sum <= 0.95) %>% 
+  pull(Pr) %>% range
+
+Figure5_results$MLE_grid$grid_search %>%
+  group_by(Ps) %>%
+  summarise(probability = sum(probability)) %>% 
+  arrange(desc(probability)) %>% 
+  mutate(cum_sum = cumsum(probability)) %>%
+  filter(cum_sum <= 0.95) %>% 
+  pull(Ps) %>% range
 
 make_plots(Figure5_results, daughter_cell_data, mother_cell_data, results_folder)
 
@@ -121,20 +144,34 @@ Figure5_results$daughter_cell_samples %>%
   theme(strip.background = element_blank(), strip.text = element_blank()) 
 
 
-## Adjust confidence intervals to be marginal:
 
-Figure5_results$MLE_grid$grid_search %>%
-  group_by(Pr) %>%
-  summarise(probability = sum(probability)) %>% 
-  arrange(desc(probability)) %>% 
-  mutate(cum_sum = cumsum(probability)) %>% 
-  filter(cum_sum <= 0.95) %>% 
-  pull(Pr) %>% range
+## Mean values of intensity per cell and number of episomes per cell
+Figure5_results$daughter_cell_samples %>% 
+  filter(chain == "chain1") %>% 
+  select(-c(chain, iteration)) %>% 
+  as.matrix %>% 
+  mean
 
-Figure5_results$MLE_grid$grid_search %>%
-  group_by(Ps) %>%
-  summarise(probability = sum(probability)) %>% 
-  arrange(desc(probability)) %>% 
-  mutate(cum_sum = cumsum(probability)) %>%
-  filter(cum_sum <= 0.95) %>% 
-  pull(Ps) %>% range
+Figure5_results$mother_cell_samples %>% 
+  filter(chain == "chain1") %>% 
+  select(-c(chain, iteration)) %>% 
+  as.matrix %>% 
+  mean
+
+Figure5_data$daughter_cell_data %>% 
+  group_by(cell_id) %>% 
+  summarise(intensity = sum(total_cluster_intensity)) %>% 
+  pull(intensity) %>% mean
+
+Figure5_data$mother_cell_data %>% 
+  group_by(cell_id) %>% 
+  summarise(intensity = sum(total_cluster_intensity)) %>% 
+  pull(intensity) %>% mean
+
+## Get standard deviation of inferred mean and sigma:
+
+Figure5_results$all_chains %>% 
+  filter(chain == "chain1") %>% 
+  select(mu, tau) %>% 
+  mutate(sd = sqrt(1/tau)) %>% 
+  apply(2, sd)

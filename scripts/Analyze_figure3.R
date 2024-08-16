@@ -37,9 +37,14 @@ daughter_cell_data <- Figure3_data$daughter_cell_data
 mother_cell_data <- Figure3_data$mother_cell_data
 
 Figure3_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_folder,
-                                n_prior = list("geom", 0.5), parallel = T)
+                                n_prior = list("geom", 0.5), parallel = T, just_Pr = T)
+
+Figure3_results$MLE_grid$grid_search %>% group_by(Pr) %>% summarise(probability = sum(probability)) %>% 
+  ggplot(aes(Pr, probability)) + geom_line(aes(color = "joint estimation")) +
+  geom_line(data = Figure3_results$MLE_Pr_grid$grid_search, aes(color = "single estimation"))
 
 Figure3_results$MLE_grid$estimates
+Figure3_results$MLE_Pr_grid$estimates
 
 make_plots(Figure3_results, daughter_cell_data, mother_cell_data, results_folder)
 

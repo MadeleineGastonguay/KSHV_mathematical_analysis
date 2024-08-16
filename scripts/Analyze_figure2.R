@@ -13,6 +13,7 @@ theme_set(theme_bw())
 
 # Check wd
 here()
+setwd(here())
 
 # Read in helper functions 
 source(here("scripts", "likelihood_functions.R"))
@@ -45,6 +46,29 @@ Figure2_results <- run_pipeline(daughter_cell_data, mother_cell_data, results_fo
 
 Figure2_results$MLE_grid$estimates
 
+## Adjust confidence intervals to be marginal:
+
+Figure2_results$MLE_grid$grid_search %>%
+  group_by(Pr) %>%
+  summarise(probability = sum(probability)) %>% 
+  arrange(desc(probability)) %>% 
+  mutate(cum_sum = cumsum(probability)) %>% 
+  filter(cum_sum <= 0.95) %>% 
+  pull(Pr) %>% range
+
+Figure2_results$MLE_grid$grid_search %>%
+  group_by(Ps) %>%
+  summarise(probability = sum(probability)) %>% 
+  arrange(desc(probability)) %>% 
+  mutate(cum_sum = cumsum(probability)) %>%
+  filter(cum_sum <= 0.95) %>% 
+  pull(Ps) %>% range
+
+
+# Figure2_results$MLE_grid$grid_search %>% group_by(Pr) %>% summarise(probability = sum(probability)) %>% 
+#   ggplot(aes(Pr, probability)) + geom_line(aes(color = "joint estimation")) +
+#   geom_line(data = Figure2_results$MLE_Pr_grid$grid_search, aes(color = "single estimation"))
+
 make_plots(Figure2_results, daughter_cell_data, mother_cell_data, results_folder)
 
 daughter_cell_samples <- Figure2_results$daughter_cell_samples
@@ -64,7 +88,6 @@ Figure2_results$all_chains %>%
 
 ## Show inference results for example images:
 # 30, 31, 3, 4
-
 example_inference <- Figure2_results$daughter_cell_samples %>% 
   filter(chain == "chain1") %>% 
   select(starts_with("30") | starts_with("31") | starts_with("3_") | starts_with("4_")) %>% 
@@ -85,79 +108,35 @@ example_inference <- Figure2_results$daughter_cell_samples %>%
 
 ggsave(here(results_folder, "example_inference.png"), width = 5, height = 1.2)
 
+## Mean values of intensity per cell and number of episomes per cell
+Figure2_results$daughter_cell_samples %>% 
+  filter(chain == "chain1") %>% 
+  select(-c(chain, iteration)) %>% 
+  as.matrix %>% 
+  mean
 
-## Adjust confidence intervals to be marginal:
+Figure2_results$mother_cell_samples %>% 
+  filter(chain == "chain1") %>% 
+  select(-c(chain, iteration)) %>% 
+  as.matrix %>% 
+  mean
 
-Figure2_results$MLE_grid$grid_search %>%
-  group_by(Pr) %>%
-  summarise(probability = sum(probability)) %>% 
-  arrange(desc(probability)) %>% 
-  mutate(cum_sum = cumsum(probability)) %>% 
-  filter(cum_sum <= 0.95) %>% 
-  pull(Pr) %>% range
+Figure2_data$daughter_cell_data %>% 
+  group_by(cell_id) %>% 
+  summarise(intensity = sum(total_cluster_intensity)) %>% 
+  pull(intensity) %>% mean
 
-Figure2_results$MLE_grid$grid_search %>%
-  group_by(Ps) %>%
-  summarise(probability = sum(probability)) %>% 
-  arrange(desc(probability)) %>% 
-  mutate(cum_sum = cumsum(probability)) %>%
-  filter(cum_sum <= 0.95) %>% 
-  pull(Ps) %>% range
+Figure2_data$mother_cell_data %>% 
+  group_by(cell_id) %>% 
+  summarise(intensity = sum(total_cluster_intensity)) %>% 
+  pull(intensity) %>% mean
 
-## Look at the intensity distribution for dots inferred to have a single episome:
-single_epi_dist <- function(results, data, set = "all", title = ""){
-  temp_df <- results$all_chains %>% 
-    filter(chain == "chain1") %>% 
-    pivot_longer(grep("[0-9]", names(results$all_chains)), names_to = "cluster", values_to = "n_epi") %>% 
-    count(cluster, n_epi) %>% 
-    group_by(cluster) %>% 
-    mutate(p = n/sum(n)) 
-  
-  single_episome_clusters <- temp_df %>% filter(n == max(n), n_epi == 1) %>% pull(cluster)
-  
-  print(temp_df %>% 
-          filter(cluster %in% single_episome_clusters) %>% 
-          ggplot(aes(as.factor(n_epi), p)) + geom_boxplot(outlier.shape = NA) + geom_point() + 
-          geom_line(aes(group = cluster), alpha = 0.1))
-  
-  if(set == "daughter"){
-    results$all_chains <- results$all_chains %>% rename(mu = mu_d, tau = tau_d)
-    data_subset <- data$daughter_cell_data %>% select(cluster_id, total_cluster_intensity) %>% 
-      filter(cluster_id %in% single_episome_clusters) 
-  }else if(set == "mother"){
-    results$all_chains <- results$all_chains %>% rename(mu = mu_m, tau = tau_m)
-    data_subset <- data$mother_cell_data %>% select(cluster_id, total_cluster_intensity) %>% 
-      filter(cluster_id %in% single_episome_clusters) 
-  }else{
-    data_subset <- rbind(
-      data$mother_cell_data %>% select(cluster_id, total_cluster_intensity),
-      data$daughter_cell_data %>% select(cluster_id, total_cluster_intensity)
-    ) %>% 
-      filter(cluster_id %in% single_episome_clusters) 
-  }
-  
-  
-  qqplot <- data_subset %>% ggplot(aes(sample= total_cluster_intensity)) + stat_qq() + stat_qq_line() + 
-    labs(title = "qqplot", x = "theoretical quantiles", y ="sample quantiles")
-  
-  mean <- results$all_chains %>% pull(mu) %>% median
-  sd <- results$all_chains %>% mutate(sd = sqrt(1/tau)) %>% pull(sd) %>% median  
-  
-  plot <- data_subset %>% 
-    ggplot(aes(total_cluster_intensity)) +
-    geom_density(aes(lty = "data")) +
-    stat_function(fun = dnorm , args = list(mean = mean, sd = sd), aes(lty = "fit normal distribution")) + 
-    labs(y = "density", title = "density plot") + 
-    theme(legend.title = element_blank(), legend.position = c(1,0), legend.justification = c(1.1,-0.1))
-  
-  title <- ifelse(set == "all", title, paste(title, set, "cells"))
-  print(qqplot + plot + plot_annotation(title = title))
-  
-}
+## Get standard deviation of inferred mean and sigma:
 
-single_epi_dist(Figure2_results, Figure2_data, "Fixed 8TR")
-single_epi_dist(Figure3_results, Figure3_data, "Live 8TR")
-single_epi_dist(Figure5_results, Figure5_data, "Fixed KSHV")
-single_epi_dist(Figure6_results, Figure6_data, "daughter", "Live KSHV")
-single_epi_dist(Figure6_results, Figure6_data, "mother", "Live KSHV")
+Figure2_results$all_chains %>% 
+  filter(chain == "chain1") %>% 
+  select(mu, tau) %>% 
+  mutate(sd = sqrt(1/tau)) %>% 
+  apply(2, sd)
+
 
