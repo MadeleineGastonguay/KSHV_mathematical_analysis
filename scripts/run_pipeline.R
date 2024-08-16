@@ -60,8 +60,9 @@ load_data <- function(mother_cell_file, daughter_cell_file){
 
 run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder, 
                          n_iterations = 100000, burn_in = 5000, MLE_n_samples = 100, 
-                         same_mu = T, overwrite = F, n_prior = list("pois", 1), parallel = F){
-
+                         same_mu = T, overwrite = F, n_prior = list("pois", 1), parallel = F,
+                         just_Pr = F){
+  
   
   # Make results folder
   if(!file.exists(results_folder)) dir.create(results_folder, showWarnings = F)
@@ -205,7 +206,7 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
   #####
   cat("\nChecking convergence of MCMC","\n===")
   file <- here(results_folder, "MCMC_convergence.RData")
-  if(file.exists(file)){
+  if(file.exists(file)  & !overwrite){
     load(file)
   }else{
     convergence <- convergence_results(all_chains)
@@ -228,37 +229,38 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
   
   cat("\nRunning Maximum Likelihood on", MLE_n_samples, "samples from MCMC")
   
+  # randomly choose samples from the markov chain to use as inferred value of number of episomes per cell:
+  samples <- sample(unique(all_chains$iteration), MLE_n_samples, replace = FALSE)
+  
+  # reformat samples so that we can apply the grid search function: 
+  # need a column for mother cell id, number of cells in daughter cell 1, and number of cells in daughter cecll 2
+  sampled_experimental_data <- cell_samples_long %>%
+    filter(chain == "chain1", set == "daughter", iteration %in% samples) %>% 
+    # pull in mother and daughter cell ids
+    left_join(distinct(daughter_cell_data, cell_id, mother_cell_id), by = c("cell_id")) %>%
+    group_by(mother_cell_id, iteration) %>% 
+    summarise(X1 = max(number_of_episomes), X2 = ifelse(n() > 1, min(number_of_episomes), 0)) %>% 
+    ungroup()
+  
   file <- here(results_folder, "MLE_with_uncertainty.RData")
   if(file.exists(file) & !overwrite){
     load(file)
   }else{
     if(parallel){
-    #create the cluster
-    my.cluster <- parallel::makeCluster(2, type = "PSOCK")
-    
-    #check cluster definition (optional)
-    print(my.cluster)
-    
-    #register it to be used by %dopar%
-    doParallel::registerDoParallel(cl = my.cluster)
-    
-    #check if it is registered (optional)
-    cat("cluster registered:")
-    print(foreach::getDoParRegistered())
-    
-  }
-    # randomly choose samples from the markov chain to use as inferred value of number of episomes per cell:
-    samples <- sample(unique(all_chains$iteration), MLE_n_samples, replace = FALSE)
-    
-    # reformat samples so that we can apply the grid search function: 
-    # need a column for mother cell id, number of cells in daughter cell 1, and number of cells in daughter cecll 2
-    sampled_experimental_data <- cell_samples_long %>%
-      filter(chain == "chain1", set == "daughter", iteration %in% samples) %>% 
-      # pull in mother and daughter cell ids
-      left_join(distinct(daughter_cell_data, cell_id, mother_cell_id), by = c("cell_id")) %>%
-      group_by(mother_cell_id, iteration) %>% 
-      summarise(X1 = max(number_of_episomes), X2 = ifelse(n() > 1, min(number_of_episomes), 0)) %>% 
-      ungroup()
+      #create the cluster
+      my.cluster <- parallel::makeCluster(2, type = "PSOCK")
+      
+      #check cluster definition (optional)
+      print(my.cluster)
+      
+      #register it to be used by %dopar%
+      doParallel::registerDoParallel(cl = my.cluster)
+      
+      #check if it is registered (optional)
+      cat("cluster registered:")
+      print(foreach::getDoParRegistered())
+      
+    }
     
     # iterate through the sampled data and apply a grid search to each one
     j <- 1
@@ -281,7 +283,7 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
     }
     save(MLE_with_uncertainty, file = file)
     
-    if(parallel) parallel::stopCluster(my.cluster)
+    if(parallel & !just_Pr) parallel::stopCluster(my.cluster)
   }
   
   cat("\n===")
@@ -301,15 +303,86 @@ run_pipeline <- function(daughter_cell_data, mother_cell_data, results_folder,
   
   cat("\nDone") 
   
-  
+  if(!just_Pr){
     return(list(all_chains = all_chains, 
                 daughter_cell_samples = daughter_cell_samples, 
                 mother_cell_samples = mother_cell_samples, 
                 convergence_metrics = convergence, 
                 X0_lambda = lambda, 
                 MLE_grid = MLE_uncertainty_grid))
+  }else{
+    if(parallel & !exists("my.cluster")){
+      #create the cluster
+      my.cluster <- parallel::makeCluster(2, type = "PSOCK")
+      
+      #check cluster definition (optional)
+      print(my.cluster)
+      
+      #register it to be used by %dopar%
+      doParallel::registerDoParallel(cl = my.cluster)
+      
+      #check if it is registered (optional)
+      cat("cluster registered:")
+      print(foreach::getDoParRegistered())
+    }
+    
+    file <- here(results_folder, "MLE_Pr_with_uncertainty.RData")
+    if(file.exists(file) & !overwrite){
+      load(file)
+    }else{
+      print(dim(sampled_experimental_data))
+      ## Estimate Pr only from sum of daughter cells
+      j <- 1
+      MLE_with_uncertainty <- foreach(i = samples, .packages = c("tidyverse", "here")) %dopar% {
+        cat("\n", j)
+        print("in loop")
+        source(here("scripts","likelihood_functions.R"))
+        j <- j+1
+        temp <- sampled_experimental_data %>% 
+          filter(iteration == i) %>%
+          select(id =  mother_cell_id,  X1, X2) %>%
+          #  run a  grid search with a grid ranging by 0.01 and a PMF inferred from the experimental data
+          run_grid_search(viz = F, increment = 0.01,
+                          lambda = lambda,
+                          known_X0 = F, CI = F, just_Pr = T)
+        
+        # scale the log likelihood according to the maximum  value and then convert to a probability
+        temp <- temp$grid_search %>% mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
+                                            probability = likelihood/sum(likelihood))
+        temp
+      }
+      save(MLE_with_uncertainty, file = file)
+      
+      if(parallel) parallel::stopCluster(my.cluster)
+      
+    }
+    
+    MLE_with_uncertainty_df <- MLE_with_uncertainty %>% bind_rows() %>% 
+      select(Pr, Ps, probability) %>% 
+      group_by(Pr, Ps) %>% summarise(probability = sum(probability)) %>% 
+      ungroup %>% 
+      mutate(probability = probability/sum(probability),
+             log_likelihood = log(probability))
+    
+    MLE_with_uncertainty_CI <- calculate_CI(MLE_with_uncertainty_df)
+    
+    MLE_Pr_uncertainty_grid <- list(grid_search = MLE_with_uncertainty_df, 
+                                    estimates = MLE_with_uncertainty_CI$estimates,
+                                    top_95 = MLE_with_uncertainty_CI$probs)
+    
+    return(list(all_chains = all_chains, 
+                daughter_cell_samples = daughter_cell_samples, 
+                mother_cell_samples = mother_cell_samples, 
+                convergence_metrics = convergence, 
+                X0_lambda = lambda, 
+                MLE_grid = MLE_uncertainty_grid,
+                MLE_Pr_grid = MLE_Pr_uncertainty_grid, 
+                sampled_data = sampled_experimental_data))
+  }
+  
   
 }
+
 
 make_plots <- function(pipeline_output, daughter_cell_data, mother_cell_data, results_folder){
   
@@ -692,6 +765,7 @@ make_plots <- function(pipeline_output, daughter_cell_data, mother_cell_data, re
   # Maximum Likelihood Estimation Results
   #####
   
+  # browser()
   MLE_plot <- plot_grid_search(MLE_grid, simulation = F, prob = T) 
   
   ggsave(here(results_folder, "MLE_grid.pdf"), MLE_plot, width = 7, height = 7)
@@ -893,5 +967,4 @@ figures <- function(daughter_cell_data, mother_cell_data, daughter_cell_samples,
   
   
 }
-
 
