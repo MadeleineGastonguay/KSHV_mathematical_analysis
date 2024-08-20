@@ -218,26 +218,50 @@ calculate_maximum_likelihood_unknownX0 <- function(data, Pr_values, Ps_values, l
 
 
 ## Function to calculate uncertainty in maximum likelihood estimates
-calculate_CI <- function(likelihoods){
+calculate_CI <- function(likelihoods, marginal_CI = F){
   probabilities <- likelihoods %>% 
     # Convert to probability
     mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
            probability = likelihood/sum(likelihood)) %>% 
     # Rank by probability 
-    arrange(desc(probability)) %>% 
-    # Find boxes that sum to 0.95
-    mutate(cumulative_prob = cumsum(probability),
-           t = abs(cumulative_prob - 0.95))
+    arrange(desc(probability)) 
   
-  threshold <- probabilities %>% filter(cumulative_prob >= 0.95) %>% 
-    filter(t == min(t)) %>% 
-    pull(cumulative_prob)
-  probabilities <- probabilities %>% filter(cumulative_prob <= threshold)  
   
-  # 95% CI for Pr:
-  CI_Pr <- range(probabilities$Pr)
-  # 95% CI for Ps:
-  CI_Ps <- range(probabilities$Ps)
+  if(marginal_CI){
+    CI_Pr <- probabilities %>% 
+      group_by(Pr) %>%
+      summarise(probability = sum(probability)) %>% 
+      arrange(desc(probability)) %>% 
+      mutate(cum_sum = cumsum(probability)) %>% 
+      filter(cum_sum <= 0.95) %>% 
+      pull(Pr) %>% range
+    
+    CI_Ps <- probabilities %>% 
+      group_by(Ps) %>%
+      summarise(probability = sum(probability)) %>% 
+      arrange(desc(probability)) %>% 
+      mutate(cum_sum = cumsum(probability)) %>% 
+      filter(cum_sum <= 0.95) %>% 
+      pull(Ps) %>% range
+    
+  }else{
+    probabilities <- probabilities %>% 
+      # Find boxes that sum to 0.95
+      mutate(cumulative_prob = cumsum(probability),
+             t = abs(cumulative_prob - 0.95))
+    
+    threshold <- probabilities %>% filter(cumulative_prob >= 0.95) %>% 
+      filter(t == min(t)) %>% 
+      pull(cumulative_prob)
+    probabilities <- probabilities %>% filter(cumulative_prob <= threshold) 
+    
+    # 95% CI for Pr:
+    CI_Pr <- range(probabilities$Pr)
+    # 95% CI for Ps:
+    CI_Ps <- range(probabilities$Ps)
+  }
+  
+   
   # MLE:
   mle <- probabilities %>% slice(1) %>% select(Pr, Ps) %>% unlist
   
@@ -245,7 +269,7 @@ calculate_CI <- function(likelihoods){
 }
 
 # Function for running a grid search of possible Pr and Ps values, calculate uncertainty, and optionally plot the results
-run_grid_search <- function(simulated_data, viz = T, increment = 0.01, known_X0 = T, lambda = NA, CI = T, just_Pr = F){
+run_grid_search <- function(simulated_data, viz = T, increment = 0.01, known_X0 = T, lambda = NA, CI = T, just_Pr = F, marginal_CI = F){
   # simulated_data is a data frame simulated with the columns X0, X1, X2, and id (outcome of simulate_multiple_cells)
   # viz is a logical indicating if the results should be visualized
   # increment is a parameter that determines how fine-grained the grid search is
@@ -260,8 +284,8 @@ run_grid_search <- function(simulated_data, viz = T, increment = 0.01, known_X0 
   out <- list(grid_search = grid_search, simulated_data = simulated_data)
   
   if(CI){
-    CIs <- calculate_CI(grid_search)$estimates
-    top_95 <- calculate_CI(grid_search)$probs    
+    CIs <- calculate_CI(grid_search, marginal_CI)$estimates
+    top_95 <- calculate_CI(grid_search, marginal_CI)$probs   
     out <- list(grid_search = grid_search, estimates = CIs, top_95 = top_95, simulated_data = simulated_data)
   }
   
@@ -284,11 +308,11 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, erro
   
   if(prob){
     if(!poster){
-    grid_search_plot <- grid_search %>% 
-      mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
-             probability = likelihood/sum(likelihood)) %>%  
-      ggplot(aes(Pr, Ps)) + 
-      geom_raster(aes(fill = probability)) 
+      grid_search_plot <- grid_search %>% 
+        mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
+               probability = likelihood/sum(likelihood)) %>%  
+        ggplot(aes(Pr, Ps)) + 
+        geom_raster(aes(fill = probability)) 
     }else{
       grid_search_plot <- grid_search %>% 
         mutate(likelihood = exp(log_likelihood - max(log_likelihood)),
@@ -356,7 +380,7 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, erro
     theme_classic()
   
   if(poster){
-      grid_search_plot + 
+    grid_search_plot + 
       labs(caption = "") + 
       theme(
         # panel.background = element_rect(fill='black'), #transparent panel bg
@@ -367,8 +391,8 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, erro
       ) + 
       geom_hline(yintercept = 50, lty = "dashed", color = "red") + 
       geom_vline(xintercept = 50, lty = "dashed", color = "red")
-      # plot_layout(guides = "collect", heights = c(0.5,2), widths = c(2,0.5)) + 
-      # plot_annotation(title = "Grid Search for Maxmimum Likelihood Estimate of Pr and Ps") 
+    # plot_layout(guides = "collect", heights = c(0.5,2), widths = c(2,0.5)) + 
+    # plot_annotation(title = "Grid Search for Maxmimum Likelihood Estimate of Pr and Ps") 
   }else{
     Pr_marginal_likelihood + 
       theme(axis.title.x = element_blank(), plot.margin = margin(0,0,0,0), 
@@ -382,7 +406,7 @@ plot_grid_search <- function(run_grid_search_out, simulation = T, prob = F, erro
       plot_annotation(title = "Grid Search for Maxmimum Likelihood Estimate of Pr and Ps")
   }
   
-
+  
 }
 
 
