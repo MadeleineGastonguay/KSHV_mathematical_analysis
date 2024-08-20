@@ -60,7 +60,7 @@ simStepFlex <- function(pRep, pSeg, cells, birthVec, deathVec, selectAgainstZero
   }
 }
 
-extinction <- function(pRep, pSeg, nTrials, n_epi, selectAgainstZero = F, n_cells = 1000){
+extinction <- function(pRep, pSeg, nTrials, n_epi, selectAgainstZero = F, n_cells = 1000, n_cells_start = NULL){
   
   results = 1:nTrials*0
   times = c()
@@ -77,6 +77,8 @@ extinction <- function(pRep, pSeg, nTrials, n_epi, selectAgainstZero = F, n_cell
   eight = c()
   nine = c()
   
+  if(is.null(n_cells_start)) n_cells_start <- n_cells
+  
   i = 1
   j = 1
   for(z in 1:nTrials){
@@ -84,7 +86,7 @@ extinction <- function(pRep, pSeg, nTrials, n_epi, selectAgainstZero = F, n_cell
     time = 0
     deathVec = rep(1, 10)
     cells = rep(0, 10)
-    cells[n_epi + 1] <- n_cells
+    cells[n_epi + 1] <- n_cells_start
     total = sum((0:9)*cells)
     indicator <- T
     while(indicator){
