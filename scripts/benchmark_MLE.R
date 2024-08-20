@@ -7,9 +7,6 @@
 # load libraries 
 library(tidyverse)
 library(here)
-# library(furrr)
-
-# future::plan(multisession, workers = 4)
 
 theme_set(theme_bw())
 
@@ -47,12 +44,12 @@ MLE_with_known_X0 <- sim_data %>%
   group_by(simulation) %>% 
   nest() %>% 
   pull(data) %>% 
-  map(run_grid_search, viz = F, known_X0 = T)
+  map(run_grid_search, viz = F, known_X0 = T, marginal_CI = T)
+
 
 MLE_with_known_X0_estimates <- MLE_with_known_X0 %>% lapply("[[", "estimates") %>% 
   list_rbind(names_to = "simulation") %>% remove_rownames() %>% 
   mutate(rep = 1)
-  # merge(sim_parameters %>% mutate(simulation = 1:nrow(.)), by = "simulation") 
 
 MLE_with_known_X0_grid <- MLE_with_known_X0 %>% lapply("[[", "grid_search") %>% 
   list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = 1)
@@ -90,7 +87,7 @@ MLE_with_unknown_X0 <- sim_data %>%
   group_by(simulation) %>%
   nest() %>%
   pull(data) %>%
-  map(run_grid_search, viz = F, known_X0 = F, lambda = 3)
+  map(run_grid_search, viz = F, known_X0 = F, lambda = 3, marginal_CI = T)
 
 MLE_with_unknown_X0_estimates <- MLE_with_unknown_X0 %>% lapply("[[", "estimates") %>% 
   list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = 1)
@@ -100,8 +97,8 @@ MLE_with_unknown_X0_grid <- MLE_with_unknown_X0 %>% lapply("[[", "grid_search") 
 
 data <- list(sim_data)
 
-## Repeat 9 more times:
-for(i in 2:10){
+## Repeat 99 more times:
+for(i in 2:100){
   sim_data.2 <- sim_parameters %>% 
     pmap(function(Pr, Ps, n){
       X0s <- sample(1:100, n, replace = T, prob = dpois(1:100, 3))
@@ -122,8 +119,8 @@ for(i in 2:10){
                                            list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = i)   )
   
   MLE_with_unknown_X0_grid <- rbind(MLE_with_unknown_X0_grid, 
-                                         MLE_with_unknown_X0.2 %>% lapply("[[", "grid_search") %>% 
-                                           list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = i)   )
+                                    MLE_with_unknown_X0.2 %>% lapply("[[", "grid_search") %>% 
+                                      list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = i)   )
   
   MLE_with_known_X0.2 <- sim_data.2 %>% 
     group_by(simulation) %>%
@@ -136,23 +133,27 @@ for(i in 2:10){
                                          list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = i)   )
   
   MLE_with_known_X0_grid <- rbind(MLE_with_known_X0_grid, 
-                                    MLE_with_known_X0.2 %>% lapply("[[", "grid_search") %>% 
-                                      list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = i)   )
-
+                                  MLE_with_known_X0.2 %>% lapply("[[", "grid_search") %>% 
+                                    list_rbind(names_to = "simulation") %>% remove_rownames() %>% mutate(rep = i)   )
+  
 }
 
-MLE_with_unknown_X0_estimates <- MLE_with_unknown_X0_estimates %>%  
-  left_join(sim_parameters %>% mutate(simulation = 1:nrow(.)),  by = "simulation") 
+MLE_with_unknown_X0_estimates <- MLE_with_unknown_X0_estimates %>%
+  left_join(sim_parameters %>% mutate(simulation = 1:nrow(.)),  by = "simulation")
 
-MLE_with_known_X0_estimates <- MLE_with_known_X0_estimates %>%  
-  left_join(sim_parameters %>% mutate(simulation = 1:nrow(.)),  by = "simulation") 
+MLE_with_known_X0_estimates <- MLE_with_known_X0_estimates %>%
+  left_join(sim_parameters %>% mutate(simulation = 1:nrow(.)),  by = "simulation")
 
 
 save(MLE_with_known_X0_estimates,  data,  MLE_with_known_X0_grid,
-     file = here("results", "benchmarking", "MLE_results_knownX0.RData"))
+     file = here("results", "benchmarking", "MLE_results_knownX0_updated.RData"))
+
+# load(here("results", "benchmarking", "MLE_results_knownX0.RData"))
 
 save(MLE_with_unknown_X0_estimates, data, MLE_with_unknown_X0_grid,
-     file = here("results", "benchmarking", "MLE_results_unknownX0.RData"))
+     file = here("results", "benchmarking", "MLE_results_unknownX0_updated.RData"))
+
+# load(here("results", "benchmarking", "MLE_results_unknownX0.RData"))
 
 #####
 # Plots
@@ -233,77 +234,130 @@ save(MLE_with_unknown_X0_estimates, data, MLE_with_unknown_X0_grid,
 #####
 # Supplemental Figures
 #####
+# 
+# Pr_estimates <- MLE_with_unknown_X0_estimates %>% 
+#   mutate(Ps = paste0(Ps*100, "%")) %>% 
+#   ggplot(aes(MLE_Pr - Pr, as.factor(Pr), group = rep, color = min_Pr <= Pr & max_Pr >= Pr)) + 
+#   geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
+#   geom_point(position = position_dodge2(width = 0.7)) + 
+#   geom_linerange(aes(xmin = min_Pr - Pr, xmax=  max_Pr - Pr ),
+#                  position = position_dodge2(width = 0.7)) +
+#   facet_grid(n~Ps, labeller = "label_both") +
+#   scale_color_manual(values = c("black", "darkgray")) +
+#   guides(color ="none") + 
+#   labs(y = "Pr", x = "Difference between MLE and parameter value (MLE_Pr - Pr)") +
+#   scale_x_continuous(limits = c(-1,1)) + 
+#   theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
+# 
+# Ps_estimates <- MLE_with_unknown_X0_estimates %>% 
+#   mutate(Pr = paste0(Pr*100, "%")) %>% 
+#   ggplot(aes(MLE_Ps - Ps, as.factor(Ps), group = rep, color = min_Ps <= Ps & max_Ps >= Ps)) + 
+#   geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
+#   geom_point(position = position_dodge2(width = 0.7)) + 
+#   geom_linerange(aes(xmin = min_Ps - Ps, xmax=  max_Ps - Ps ),
+#                  position = position_dodge2(width = 0.7)) +
+#   facet_grid(n~Pr, labeller = "label_both") +
+#   scale_color_manual(values = c("black", "darkgray")) +
+#   guides(color ="none") + 
+#   labs(y = "Ps", x = "Difference between MLE and parameter value (MLE_Ps - Ps)") + 
+#   scale_x_continuous(limits = c(-1,1)) + 
+#   theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
+# 
+# ggsave(here("results", "benchmarking", "Pr_estimates.png"), Pr_estimates, width = 7, height = 6)
+# ggsave(here("results", "benchmarking", "Ps_estimates.png"), Ps_estimates, width = 7, height = 6)
+# 
+# Pr_estimates_knownX0 <- MLE_with_known_X0_estimates %>% 
+#   mutate(Ps = paste0(Ps*100, "%")) %>% 
+#   ggplot(aes(MLE_Pr - Pr, as.factor(Pr), group = rep, color = min_Pr <= Pr & max_Pr >= Pr)) + 
+#   geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
+#   geom_point(position = position_dodge2(width = 0.7)) + 
+#   geom_linerange(aes(xmin = min_Pr - Pr, xmax=  max_Pr - Pr ),
+#                  position = position_dodge2(width = 0.7)) +
+#   facet_grid(n~Ps, labeller = "label_both") +
+#   scale_color_manual(values = c("black", "darkgray")) +
+#   guides(color ="none") + 
+#   labs(y = "Pr", x = "Difference between MLE and parameter value (MLE_Pr - Pr)") +
+#   scale_x_continuous(limits = c(-1,1)) + 
+#   theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
+# 
+# Ps_estimates_knownX0 <- MLE_with_known_X0_estimates %>% 
+#   mutate(Pr = paste0(Pr*100, "%")) %>% 
+#   ggplot(aes(MLE_Ps - Ps, as.factor(Ps), group = rep, color = min_Ps <= Ps & max_Ps >= Ps)) + 
+#   geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
+#   geom_point(position = position_dodge2(width = 0.7)) + 
+#   geom_linerange(aes(xmin = min_Ps - Ps, xmax=  max_Ps - Ps ),
+#                  position = position_dodge2(width = 0.7)) +
+#   facet_grid(n~Pr, labeller = "label_both") +
+#   scale_color_manual(values = c("black", "darkgray")) +
+#   guides(color ="none") + 
+#   labs(y = "Ps", x = "Difference between MLE and parameter value (MLE_Ps - Ps)") + 
+#   scale_x_continuous(limits = c(-1,1)) + 
+#   theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
+# 
+# ggsave(here("results", "benchmarking", "Pr_estimates_knownX0.png"), Pr_estimates_knownX0, width = 7, height = 6)
+# ggsave(here("results", "benchmarking", "Ps_estimates_knownX0.png"), Ps_estimates_knownX0, width = 7, height = 6)
+# 
+# merge(
+#   MLE_with_known_X0_estimates %>% select(simulation, MLE_Pr, MLE_Ps, rep, Pr, Ps, n),
+#   MLE_with_unknown_X0_estimates %>% select(simulation, MLE_Pr, MLE_Ps, rep),
+#   by = c("simulation", "rep")
+# ) %>% 
+#   ggplot() + 
+#   geom_point(data = . %>% mutate(param = "Pr"), aes(MLE_Pr.x, MLE_Pr.y, color = factor(Ps)))  + 
+#   geom_point(data = . %>% mutate(param = "Ps"), aes(MLE_Ps.x, MLE_Ps.y, color = factor(Pr))) +
+#   geom_abline() + 
+#   facet_grid(n~param) + 
+#   labs(x = "MLE with known X0", y = "MLE with unknown X0", color = "Parameter Value")
+# 
+# merge(
+#   MLE_with_known_X0_estimates %>% select(simulation, MLE_Pr, MLE_Ps, rep, Pr, Ps, n),
+#   MLE_with_unknown_X0_estimates %>% select(simulation, MLE_Pr, MLE_Ps, rep),
+#   by = c("simulation", "rep")
+# ) %>% 
+#   ggplot() + 
+#   geom_point(data = . %>% mutate(param = "Pr", value = factor(Ps)), aes(MLE_Pr.x, MLE_Pr.y, color = factor(n)))  + 
+#   geom_point(data = . %>% mutate(param = "Ps", value = factor(Pr)), aes(MLE_Ps.x, MLE_Ps.y, color = factor(n))) +
+#   geom_abline() + 
+#   facet_grid(value~param) + 
+#   labs(x = "MLE with known X0", y = "MLE with unknown X0", color = "Sample Size")
 
-Pr_estimates <- MLE_with_unknown_X0_estimates %>% 
-  mutate(Ps = paste0(Ps*100, "%")) %>% 
-  ggplot(aes(MLE_Pr - Pr, as.factor(Pr), group = rep, color = min_Pr <= Pr & max_Pr >= Pr)) + 
-  geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
+
+
+Pr_estimates <- MLE_with_unknown_X0_estimates %>%
+  arrange(n) %>% 
+  mutate(Pr_facet = paste0("Replication Efficiency: ", Pr*100, "%"),
+         n = fct_inorder(paste(n, "Daughter Cell Pairs")))%>% 
+  ggplot(aes(MLE_Pr*100, as.factor(Ps*100), group = rep, color = min_Pr <= Pr & max_Pr >= Pr)) + 
+  geom_vline(aes(xintercept = Pr*100), lty = "dashed", color = "red")  +
   geom_point(position = position_dodge2(width = 0.7)) + 
-  geom_linerange(aes(xmin = min_Pr - Pr, xmax=  max_Pr - Pr ),
+  geom_linerange(aes(xmin = min_Pr*100, xmax=  max_Pr*100),
                  position = position_dodge2(width = 0.7)) +
-  facet_grid(n~Ps, labeller = "label_both") +
+  facet_grid(n~Pr_facet) +
   scale_color_manual(values = c("black", "darkgray")) +
   guides(color ="none") + 
-  labs(y = "Pr", x = "Difference between MLE and parameter value (MLE_Pr - Pr)") +
-  scale_x_continuous(limits = c(-1,1)) + 
-  theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
+  labs(y = "True Segregation Efficiency (%)", x = "MLE of Replication Efficiency (%)") +
+  scale_x_continuous(limits = c(0,100), breaks = seq(0,100, by= 20)) + 
+  theme(panel.grid.major.y =  element_blank()) + 
+  geom_point(data = . %>% group_by(Pr_facet, Pr, Ps, n) %>% summarise(MLE_Pr = mean(MLE_Pr)),
+             aes(MLE_Pr*100, as.factor(Ps*100)), inherit.aes = F, color = "red", fill = "red", alpha = 0.5, shape = 24, size = 3)
 
-Ps_estimates <- MLE_with_unknown_X0_estimates %>% 
-  mutate(Pr = paste0(Pr*100, "%")) %>% 
-  ggplot(aes(MLE_Ps - Ps, as.factor(Ps), group = rep, color = min_Ps <= Ps & max_Ps >= Ps)) + 
-  geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
+Ps_estimates <- MLE_with_unknown_X0_estimates %>%
+  arrange(n) %>% 
+  mutate(Ps_facet = paste0("Segregation Efficiency: ", Ps*100, "%"),
+         n = fct_inorder(paste(n, "Daughter Cell Pairs")))%>% 
+  ggplot(aes(MLE_Ps*100, as.factor(Pr*100), group = rep, color = min_Ps <= Ps & max_Ps >= Ps)) + 
+  geom_vline(aes(xintercept = Ps*100), lty = "dashed", color = "red")  +
   geom_point(position = position_dodge2(width = 0.7)) + 
-  geom_linerange(aes(xmin = min_Ps - Ps, xmax=  max_Ps - Ps ),
+  geom_linerange(aes(xmin = min_Ps*100, xmax=  max_Ps*100),
                  position = position_dodge2(width = 0.7)) +
-  facet_grid(n~Pr, labeller = "label_both") +
+  facet_grid(n~Ps_facet) +
   scale_color_manual(values = c("black", "darkgray")) +
   guides(color ="none") + 
-  labs(y = "Ps", x = "Difference between MLE and parameter value (MLE_Ps - Ps)") + 
-  scale_x_continuous(limits = c(-1,1)) + 
-  theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
+  labs(y = "True Replication Efficiency (%)", x = "MLE of Segregation Efficiency (%)") +
+  scale_x_continuous(limits = c(0,100), breaks = seq(0,100, by= 20)) + 
+  theme(panel.grid.major.y =  element_blank()) + 
+  geom_point(data = . %>% group_by(Ps_facet, Ps, Pr, n) %>% summarise(MLE_Ps = mean(MLE_Ps)),
+             aes(MLE_Ps*100, as.factor(Pr*100)), inherit.aes = F, color = "red", fill = "red", alpha = 0.5, shape = 24, size = 3)
 
-ggsave(here("results", "benchmarking", "Pr_estimates.png"), Pr_estimates, width = 7, height = 6)
-ggsave(here("results", "benchmarking", "Ps_estimates.png"), Ps_estimates, width = 7, height = 6)
 
-Pr_estimates_knownX0 <- MLE_with_known_X0_estimates %>% 
-  mutate(Ps = paste0(Ps*100, "%")) %>% 
-  ggplot(aes(MLE_Pr - Pr, as.factor(Pr), group = rep, color = min_Pr <= Pr & max_Pr >= Pr)) + 
-  geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
-  geom_point(position = position_dodge2(width = 0.7)) + 
-  geom_linerange(aes(xmin = min_Pr - Pr, xmax=  max_Pr - Pr ),
-                 position = position_dodge2(width = 0.7)) +
-  facet_grid(n~Ps, labeller = "label_both") +
-  scale_color_manual(values = c("black", "darkgray")) +
-  guides(color ="none") + 
-  labs(y = "Pr", x = "Difference between MLE and parameter value (MLE_Pr - Pr)") +
-  scale_x_continuous(limits = c(-1,1)) + 
-  theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
-
-Ps_estimates_knownX0 <- MLE_with_known_X0_estimates %>% 
-  mutate(Pr = paste0(Pr*100, "%")) %>% 
-  ggplot(aes(MLE_Ps - Ps, as.factor(Ps), group = rep, color = min_Ps <= Ps & max_Ps >= Ps)) + 
-  geom_vline(xintercept = 0, lty = "dashed", color = "lightgray")  +
-  geom_point(position = position_dodge2(width = 0.7)) + 
-  geom_linerange(aes(xmin = min_Ps - Ps, xmax=  max_Ps - Ps ),
-                 position = position_dodge2(width = 0.7)) +
-  facet_grid(n~Pr, labeller = "label_both") +
-  scale_color_manual(values = c("black", "darkgray")) +
-  guides(color ="none") + 
-  labs(y = "Ps", x = "Difference between MLE and parameter value (MLE_Ps - Ps)") + 
-  scale_x_continuous(limits = c(-1,1)) + 
-  theme(panel.grid.major.y =  element_blank(), panel.grid.minor.x = element_blank())
-
-ggsave(here("results", "benchmarking", "Pr_estimates_knownX0.png"), Pr_estimates_knownX0, width = 7, height = 6)
-ggsave(here("results", "benchmarking", "Ps_estimates_knownX0.png"), Ps_estimates_knownX0, width = 7, height = 6)
-
-merge(
-  MLE_with_known_X0_estimates %>% select(simulation, MLE_Pr, MLE_Ps, rep, Pr, Ps, n),
-  MLE_with_unknown_X0_estimates %>% select(simulation, MLE_Pr, MLE_Ps, rep),
-  by = c("simulation", "rep")
-) %>% 
-  ggplot() + 
-  geom_point(data = . %>% mutate(param = "Pr"), aes(MLE_Pr.x, MLE_Pr.y, color = Ps))  + 
-  geom_point(data = . %>% mutate(param = "Ps"), aes(MLE_Ps.x, MLE_Ps.y, color = Pr)) +
-  geom_abline() + 
-  facet_grid(n~param)
 
